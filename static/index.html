@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Gold Desk</title>
+<style>
+:root{--bg:#f4f1ea;--panel:#fffdf8;--ink:#241d10;--mute:#7a6f58;--line:#e3dccb;--accent:#8a5a00;--up:#1f8a5b;--down:#c8403a;
+--red:#e5484d;--orange:#f08a24;--yellow:#e8b923;color-scheme:light}
+@media (prefers-color-scheme:dark){:root{--bg:#14110b;--panel:#1d1910;--ink:#f1e8d2;--mute:#a1957a;--line:#322b1b;--accent:#e0b04a;color-scheme:dark}}
+*{box-sizing:border-box}html,body{margin:0}
+body{background:var(--bg);color:var(--ink);font:15px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif;font-variant-numeric:tabular-nums}
+.wrap{max-width:1500px;margin:0 auto;padding:12px}
+header{display:flex;flex-wrap:wrap;gap:10px;align-items:baseline;margin-bottom:12px}
+h1{margin:0;font-size:18px}
+#price{font-size:28px;font-weight:600;margin-left:auto}
+#price.up{color:var(--up)}#price.down{color:var(--down)}
+#spread{color:var(--mute);font-size:13px}
+.tfs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px}
+button{font:inherit;color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:6px 12px;min-height:38px;cursor:pointer}
+button[aria-pressed="true"]{background:var(--accent);border-color:var(--accent);color:var(--bg)}
+button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.grid{display:grid;grid-template-columns:minmax(0,2fr) minmax(320px,1fr);gap:12px}
+@media (max-width:900px){.grid{grid-template-columns:minmax(0,1fr)}}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+#chart{height:68vh;min-height:380px}
+.next{padding:14px;border-bottom:1px solid var(--line)}
+.next small{color:var(--mute);display:block}.next b{font-size:26px}
+h2{font-size:14px;margin:0;padding:10px 14px;border-bottom:1px solid var(--line);color:var(--mute);font-weight:600}
+.dot{width:11px;height:9px;border-radius:2px;display:inline-block;margin-top:6px}
+.High{background:var(--red)}.Medium{background:var(--orange)}.Low{background:var(--yellow)}.Holiday{background:#9aa}
+.row{display:grid;grid-template-columns:90px 12px 1fr;gap:8px;padding:9px 14px;border-bottom:1px solid var(--line)}
+.row.past{opacity:.5}.row .meta{grid-column:3;color:var(--mute);font-size:13px}
+.sig{padding:9px 14px;border-bottom:1px solid var(--line)}
+.buy{color:var(--up);font-weight:600}.sell{color:var(--down);font-weight:600}
+#news{max-height:300px;overflow-y:auto}#sigs{max-height:200px;overflow-y:auto}
+.msg{padding:14px;color:var(--mute)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Gold Desk · XAU/USD</h1>
+    <span id="spread"></span>
+    <span id="price">--</span>
+  </header>
+  <div class="tfs" id="tfs" role="group" aria-label="Timeframe">
+    <button data-g="M1" data-s="60">1m</button>
+    <button data-g="M5" data-s="300">5m</button>
+    <button data-g="M15" data-s="900" aria-pressed="true">15m</button>
+    <button data-g="H1" data-s="3600">1h</button>
+    <button data-g="H4" data-s="14400">4h</button>
+    <button data-g="D" data-s="86400">1D</button>
+  </div>
+  <div class="grid">
+    <div class="panel" id="chart"></div>
+    <aside>
+      <div class="panel" style="margin-bottom:12px">
+        <div class="next"><small>Next red-folder USD event</small><b id="cd">--:--:--</b><div id="nt" style="color:var(--mute)">Loading…</div></div>
+        <h2>USD news this week</h2><div id="news"></div>
+      </div>
+      <div class="panel"><h2>TradingView signals</h2><div id="sigs"><div class="msg">No alerts received yet.</div></div></div>
+    </aside>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+<script>
+const $=id=>document.getElementById(id);
+const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&","<":"<",">":">",'"':"""}[c]));
+let gran="M15", step=900, last=null, events=[], signals=[];
+
+const dark=matchMedia("(prefers-color-scheme: dark)").matches;
+const chart=LightweightCharts.createChart($("chart"),{
+  autoSize:true,
+  layout:{background:{color:"transparent"},textColor:dark?"#a1957a":"#7a6f58"},
+  grid:{vertLines:{color:dark?"#26200f":"#eee6d2"},horzLines:{color:dark?"#26200f":"#eee6d2"}},
+  timeScale:{timeVisible:true,secondsVisible:false},rightPriceScale:{borderVisible:false}});
+const series=chart.addCandlestickSeries({upColor:"#1f8a5b",downColor:"#c8403a",borderVisible:false,wickUpColor:"#1f8a5b",wickDownColor:"#c8403a"});
+
+const snap=t=>Math.floor(t/step)*step;
+const fmt=d=>d.toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"});
+
+async function loadCandles(){
+  const r=await fetch(`/api/candles?granularity=${gran}&count=500`);
+  if(!r.ok){$("price").textContent="check .env";return}
+  const data=await r.json(); series.setData(data); last=data[data.length-1]; markers();
+}
+function markers(){
+  const m=[];
+  events.forEach(e=>{
+    if(!["High","Medium"].includes(e.impact))return;
+    const t=snap(Math.floor(new Date(e.date)/1000));
+    m.push({time:t,position:"aboveBar",shape:"square",color:e.impact==="High"?"#e5484d":"#f08a24",text:e.impact==="High"?e.title.slice(0,18):""});
+  });
+  signals.forEach(s=>{
+    const buy=String(s.side).toLowerCase()==="buy";
+    m.push({time:snap(s.t),position:buy?"belowBar":"aboveBar",shape:buy?"arrowUp":"arrowDown",color:buy?"#1f8a5b":"#c8403a",text:s.note||s.side});
+  });
+  m.sort((a,b)=>a.time-b.time); series.setMarkers(m);
+}
+
+/* live ticks */
+let prev=null;
+const es=new EventSource("/stream");
+es.addEventListener("tick",ev=>{
+  const d=JSON.parse(ev.data), t=snap(d.t);
+  $("price").textContent=d.mid.toFixed(2);
+  $("price").className=prev===null?"":(d.mid>prev?"up":"down");
+  prev=d.mid;
+  $("spread").textContent=(d.ask-d.bid).toFixed(2)+" spread";
+  if(last && last.time===t){last.high=Math.max(last.high,d.mid);last.low=Math.min(last.low,d.mid);last.close=d.mid}
+  else last={time:t,open:d.mid,high:d.mid,low:d.mid,close:d.mid};
+  series.update(last);
+});
+es.addEventListener("signal",ev=>{signals.unshift(JSON.parse(ev.data));renderSigs();markers()});
+
+/* timeframe buttons */
+$("tfs").onclick=e=>{
+  const b=e.target.closest("button"); if(!b)return;
+  document.querySelectorAll("#tfs button").forEach(x=>x.setAttribute("aria-pressed",x===b));
+  gran=b.dataset.g; step=+b.dataset.s; loadCandles();
+};
+
+/* news */
+async function loadNews(){
+  try{
+    const r=await fetch("/api/news"); if(!r.ok)throw 0;
+    events=(await r.json()).sort((a,b)=>new Date(a.date)-new Date(b.date)); renderNews(); markers();
+  }catch{$("news").innerHTML='<div class="msg">News feed unavailable. It retries every 15 minutes.</div>'}
+}
+function renderNews(){
+  const now=Date.now(), rows=events.filter(e=>e.impact!=="Low"&&e.impact!=="Holiday");
+  $("news").innerHTML=rows.length?rows.map(e=>{const d=new Date(e.date);
+    const bits=[e.forecast&&"Forecast "+esc(e.forecast),e.previous&&"Previous "+esc(e.previous)].filter(Boolean).join(" · ");
+    return `<div class="row ${d<now?"past":""}"><span>${d.toLocaleDateString([],{weekday:"short"})} ${fmt(d)}</span><span class="dot ${e.impact}"></span><span>${esc(e.title)}</span>${bits?`<span class="meta">${bits}</span>`:""}</div>`}).join("")
+    :'<div class="msg">No red or orange USD events this week.</div>';
+}
+function tick(){
+  const n=events.find(e=>e.impact==="High"&&new Date(e.date)>Date.now());
+  if(!n){$("cd").textContent="None this week";$("nt").textContent="";return}
+  let s=Math.floor((new Date(n.date)-Date.now())/1000),h=Math.floor(s/3600);
+  $("cd").textContent=h>99?`${Math.floor(h/24)}d ${h%24}h`:[h,Math.floor(s%3600/60),s%60].map(v=>String(v).padStart(2,"0")).join(":");
+  $("nt").textContent=n.title+" · "+fmt(new Date(n.date));
+}
+
+/* signals */
+function renderSigs(){
+  $("sigs").innerHTML=signals.length?signals.map(s=>`<div class="sig"><span class="${String(s.side).toLowerCase()==="buy"?"buy":"sell"}">${esc(String(s.side).toUpperCase())}</span> ${esc(s.price||"")} <span style="color:var(--mute)">${esc(s.tf?s.tf+"m · ":"")}${esc(s.note||"")} · ${fmt(new Date(s.t*1000))}</span></div>`).join(""):'<div class="msg">No alerts received yet.</div>';
+}
+fetch("/api/signals").then(r=>r.json()).then(d=>{signals=d;renderSigs();markers()}).catch(()=>{});
+
+loadCandles(); loadNews();
+setInterval(tick,1000); setInterval(loadNews,900000); setInterval(renderNews,60000);
+</script>
+</body>
+</html>
