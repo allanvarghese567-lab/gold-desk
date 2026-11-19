@@ -34,8 +34,18 @@ h2{font-size:14px;margin:0;padding:10px 14px;border-bottom:1px solid var(--line)
 .row.past{opacity:.5}.row .meta{grid-column:3;color:var(--mute);font-size:13px}
 .sig{padding:9px 14px;border-bottom:1px solid var(--line)}
 .buy{color:var(--up);font-weight:600}.sell{color:var(--down);font-weight:600}
-#news{max-height:260px;overflow-y:auto}#sigs{max-height:180px;overflow-y:auto}
+#news{max-height:200px;overflow-y:auto}#sigs{max-height:140px;overflow-y:auto}
 .msg{padding:14px;color:var(--mute)}
+.confirm-head{display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:10px 14px;border-bottom:1px solid var(--line)}
+.confirm-head select,.confirm-head button{font:inherit;padding:4px 10px;border-radius:6px;border:1px solid var(--line);background:var(--panel);color:var(--ink)}
+.confirm-meta{padding:8px 14px;font-size:13px;color:var(--mute);border-bottom:1px solid var(--line)}
+.confirm-decision{font-weight:700;font-size:15px}
+.confirm-decision.ENTER{color:var(--up)}.confirm-decision.WAIT{color:var(--mute)}
+#confirmList{max-height:220px;overflow-y:auto}
+.chk{display:grid;grid-template-columns:22px 1fr;gap:6px;padding:6px 14px;border-bottom:1px solid var(--line);font-size:13px}
+.chk .mark{font-weight:700}
+.chk.ok .mark{color:var(--up)}.chk.no .mark{color:var(--mute)}
+.chk .code{font-weight:600;margin-right:6px}
 .iframe-section{margin-top:14px}
 .iframe-bar{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-bottom:8px}
 .iframe-bar .label{color:var(--mute);font-size:13px;margin-right:4px}
@@ -77,7 +87,23 @@ h2{font-size:14px;margin:0;padding:10px 14px;border-bottom:1px solid var(--line)
         <div class="next"><small>Next red-folder USD event</small><b id="cd">--:--:--</b><div id="nt" style="color:var(--mute)">Loading…</div></div>
         <h2>USD news this week</h2><div id="news"></div>
       </div>
-      <div class="panel"><h2>TradingView signals</h2><div id="sigs"><div class="msg">No alerts received yet.</div></div></div>
+      <div class="panel" style="margin-bottom:12px"><h2>TradingView signals</h2><div id="sigs"><div class="msg">No alerts received yet.</div></div></div>
+      <div class="panel">
+        <h2>Confirmation engine</h2>
+        <div class="confirm-head">
+          <select id="cfSide"><option value="long">Long</option><option value="short">Short</option></select>
+          <select id="cfGran">
+            <option value="M15">15m</option>
+            <option value="M5">5m</option>
+            <option value="H1">1h</option>
+            <option value="H4">4h</option>
+            <option value="D">1D</option>
+          </select>
+          <button type="button" id="cfRun">Run</button>
+        </div>
+        <div class="confirm-meta" id="cfMeta">Press Run to check live XAU/USD bars.</div>
+        <div id="confirmList"></div>
+      </div>
     </aside>
   </div>
 
@@ -287,6 +313,30 @@ btnFs.onclick = ()=>{
 };
 document.addEventListener("fullscreenchange", updateFsBtn);
 document.addEventListener("webkitfullscreenchange", updateFsBtn);
+
+async function runConfirm(){
+  const side=$("cfSide").value, gran=$("cfGran").value;
+  $("cfMeta").textContent="Loading…";
+  $("confirmList").innerHTML="";
+  try{
+    const r=await fetch(`/api/confirm?side=${side}&granularity=${gran}`);
+    const d=await r.json();
+    if(!r.ok) throw new Error(d.detail||r.statusText);
+    const dec=d.decision;
+    $("cfMeta").innerHTML=`<span class="confirm-decision ${dec}">${dec} ${d.side.toUpperCase()}</span>
+      · score ${d.score}/${d.score_max} (${d.score_pct}%)
+      · entry ${d.entry} · stop ${d.stop} · tp ${d.target}
+      · cats ${d.categories.join(",")||"—"}`;
+    $("confirmList").innerHTML=d.checks.map(c=>`
+      <div class="chk ${c.ok?"ok":"no"}">
+        <span class="mark">${c.ok?"✓":"·"}</span>
+        <span><span class="code">${esc(c.code)}</span>${esc(c.desc)}</span>
+      </div>`).join("");
+  }catch(e){
+    $("cfMeta").textContent="Failed: "+(e.message||e);
+  }
+}
+$("cfRun").onclick=runConfirm;
 
 loadCandles(); loadNews();
 setInterval(tick,1000); setInterval(loadNews,900000); setInterval(renderNews,60000);
