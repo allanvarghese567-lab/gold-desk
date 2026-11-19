@@ -24,7 +24,20 @@ button.ghost{background:transparent;border-style:dashed;color:var(--mute)}
 .grid{display:grid;grid-template-columns:minmax(0,2fr) minmax(320px,1fr);gap:12px}
 @media (max-width:900px){.grid{grid-template-columns:minmax(0,1fr)}}
 .panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden}
-#chart{height:52vh;min-height:320px}
+#chart{height:52vh;min-height:320px;position:relative}
+.chart-wrap{position:relative}
+.analysis-bar{display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:8px 10px;border-bottom:1px solid var(--line);background:var(--panel)}
+.analysis-bar label{font-size:12px;color:var(--mute);display:inline-flex;align-items:center;gap:4px;cursor:pointer}
+.analysis-bar input[type=checkbox]{accent-color:var(--accent)}
+.analysis-bar input[type=range]{width:80px;vertical-align:middle}
+.analysis-bar .tool{min-height:32px;padding:4px 10px;font-size:13px}
+.analysis-bar .tool[aria-pressed=true]{background:var(--accent);border-color:var(--accent);color:var(--bg)}
+.overlay-list{max-height:100px;overflow-y:auto;padding:6px 10px;font-size:12px;border-bottom:1px solid var(--line);display:none}
+.overlay-list.show{display:block}
+.overlay-list .ov{display:flex;gap:8px;align-items:center;padding:3px 0}
+.overlay-list .ov button{min-height:26px;padding:2px 8px;font-size:12px}
+.chart-hint{position:absolute;top:10px;left:10px;z-index:5;background:rgba(0,0,0,.55);color:#fff;padding:6px 10px;border-radius:6px;font-size:12px;pointer-events:none;display:none}
+.chart-hint.show{display:block}
 .next{padding:14px;border-bottom:1px solid var(--line)}
 .next small{color:var(--mute);display:block}.next b{font-size:26px}
 h2{font-size:14px;margin:0;padding:10px 14px;border-bottom:1px solid var(--line);color:var(--mute);font-weight:600}
@@ -81,7 +94,23 @@ h2{font-size:14px;margin:0;padding:10px 14px;border-bottom:1px solid var(--line)
     <button data-g="D" data-s="86400">1D</button>
   </div>
   <div class="grid">
-    <section class="panel"><div id="chart"></div></section>
+    <section class="panel chart-wrap">
+      <div class="analysis-bar" id="analysisBar">
+        <span style="color:var(--mute);font-size:12px;margin-right:4px">Analysis</span>
+        <label><input type="checkbox" id="indMA20" checked> MA20</label>
+        <label><input type="checkbox" id="indMA50" checked> MA50</label>
+        <label><input type="checkbox" id="indBB"> BB</label>
+        <label><input type="checkbox" id="indATR"> ATR bands</label>
+        <span style="width:1px;height:20px;background:var(--line);margin:0 4px"></span>
+        <button type="button" class="tool" data-tool="hline" id="toolHline">H-Line</button>
+        <button type="button" class="tool" data-tool="zone" id="toolZone">Zone</button>
+        <button type="button" class="tool ghost" id="toolClear" title="Clear drawings">Clear</button>
+        <label style="margin-left:auto">Opacity <input type="range" id="ovOpacity" min="15" max="90" value="40"></label>
+      </div>
+      <div class="overlay-list" id="overlayList"></div>
+      <div id="chart"></div>
+      <div class="chart-hint" id="chartHint">Click chart to place level</div>
+    </section>
     <aside>
       <div class="panel" style="margin-bottom:12px">
         <div class="next"><small>Next red-folder USD event</small><b id="cd">--:--:--</b><div id="nt" style="color:var(--mute)">Loading…</div></div>
@@ -143,6 +172,159 @@ const chart=LightweightCharts.createChart($("chart"),{
   grid:{vertLines:{color:dark?"#26200f":"#eee6d2"},horzLines:{color:dark?"#26200f":"#eee6d2"}},
   timeScale:{timeVisible:true,secondsVisible:false},rightPriceScale:{borderVisible:false}});
 const series=chart.addCandlestickSeries({upColor:"#1f8a5b",downColor:"#c8403a",borderVisible:false,wickUpColor:"#1f8a5b",wickDownColor:"#c8403a"});
+const ma20=chart.addLineSeries({color:"#8a5a00",lineWidth:1,priceLineVisible:false,lastValueVisible:false,crosshairMarkerVisible:false});
+const ma50=chart.addLineSeries({color:"#5a7a8a",lineWidth:1,priceLineVisible:false,lastValueVisible:false,crosshairMarkerVisible:false});
+const bbUpper=chart.addLineSeries({color:"rgba(138,90,0,0.45)",lineWidth:1,lineStyle:2,priceLineVisible:false,lastValueVisible:false,crosshairMarkerVisible:false});
+const bbMid=chart.addLineSeries({color:"rgba(138,90,0,0.35)",lineWidth:1,lineStyle:2,priceLineVisible:false,lastValueVisible:false,crosshairMarkerVisible:false});
+const bbLower=chart.addLineSeries({color:"rgba(138,90,0,0.45)",lineWidth:1,lineStyle:2,priceLineVisible:false,lastValueVisible:false,crosshairMarkerVisible:false});
+const atrUp=chart.addLineSeries({color:"rgba(31,138,91,0.4)",lineWidth:1,lineStyle:2,priceLineVisible:false,lastValueVisible:false,crosshairMarkerVisible:false});
+const atrDn=chart.addLineSeries({color:"rgba(200,64,58,0.4)",lineWidth:1,lineStyle:2,priceLineVisible:false,lastValueVisible:false,crosshairMarkerVisible:false});
+
+let candleData=[];
+let activeTool=null;
+let zoneAnchor=null;
+let overlays=loadOverlays();
+const priceLines=[];
+
+function loadOverlays(){
+  try{return JSON.parse(localStorage.getItem("golddesk_overlays")||"[]")}catch{return []}
+}
+function saveOverlays(){localStorage.setItem("golddesk_overlays",JSON.stringify(overlays))}
+
+function sma(data,n){
+  const out=[];
+  for(let i=0;i<data.length;i++){
+    if(i+1<n) continue;
+    let s=0; for(let j=i-n+1;j<=i;j++) s+=data[j].close;
+    out.push({time:data[i].time,value:+(s/n).toFixed(3)});
+  }
+  return out;
+}
+function boll(data,n=20,k=2){
+  const up=[],mid=[],lo=[];
+  for(let i=0;i<data.length;i++){
+    if(i+1<n) continue;
+    const w=data.slice(i-n+1,i+1).map(d=>d.close);
+    const m=w.reduce((a,b)=>a+b,0)/n;
+    const sd=Math.sqrt(w.reduce((a,b)=>a+(b-m)*(b-m),0)/n);
+    mid.push({time:data[i].time,value:+m.toFixed(3)});
+    up.push({time:data[i].time,value:+(m+k*sd).toFixed(3)});
+    lo.push({time:data[i].time,value:+(m-k*sd).toFixed(3)});
+  }
+  return {up,mid,lo};
+}
+function atrBands(data,n=14,mult=1.5){
+  const tr=[];
+  for(let i=0;i<data.length;i++){
+    if(i===0){tr.push(data[i].high-data[i].low);continue}
+    const h=data[i].high,l=data[i].low,pc=data[i-1].close;
+    tr.push(Math.max(h-l,Math.abs(h-pc),Math.abs(l-pc)));
+  }
+  const up=[],dn=[];
+  let atr=null;
+  for(let i=0;i<data.length;i++){
+    if(i+1<n) continue;
+    if(atr===null){atr=tr.slice(0,n).reduce((a,b)=>a+b,0)/n}
+    else atr=(atr*(n-1)+tr[i])/n;
+    up.push({time:data[i].time,value:+(data[i].close+mult*atr).toFixed(3)});
+    dn.push({time:data[i].time,value:+(data[i].close-mult*atr).toFixed(3)});
+  }
+  return {up,dn};
+}
+
+function applyIndicators(){
+  if(!candleData.length) return;
+  const showMA20=$("indMA20").checked, showMA50=$("indMA50").checked;
+  const showBB=$("indBB").checked, showATR=$("indATR").checked;
+  ma20.setData(showMA20?sma(candleData,20):[]);
+  ma50.setData(showMA50?sma(candleData,50):[]);
+  if(showBB){const b=boll(candleData);bbUpper.setData(b.up);bbMid.setData(b.mid);bbLower.setData(b.lo)}
+  else{bbUpper.setData([]);bbMid.setData([]);bbLower.setData([])}
+  if(showATR){const a=atrBands(candleData);atrUp.setData(a.up);atrDn.setData(a.dn)}
+  else{atrUp.setData([]);atrDn.setData([])}
+}
+
+function overlayColor(alpha){
+  const a=(alpha/100).toFixed(2);
+  return {line:`rgba(138,90,0,${a})`,zone:`rgba(138,90,0,${(alpha/200).toFixed(2)})`};
+}
+function clearPriceLines(){
+  priceLines.splice(0).forEach(pl=>{try{series.removePriceLine(pl)}catch{}});
+}
+function redrawOverlays(){
+  clearPriceLines();
+  const alpha=+$("ovOpacity").value;
+  const col=overlayColor(alpha);
+  overlays.forEach((ov,i)=>{
+    if(ov.type==="hline"){
+      const pl=series.createPriceLine({price:ov.price,color:col.line,lineWidth:2,lineStyle:0,axisLabelVisible:true,title:ov.label||""});
+      priceLines.push(pl);
+    } else if(ov.type==="zone"){
+      const pl1=series.createPriceLine({price:ov.top,color:col.line,lineWidth:1,lineStyle:2,axisLabelVisible:true,title:ov.label||"Z"});
+      const pl2=series.createPriceLine({price:ov.bottom,color:col.line,lineWidth:1,lineStyle:2,axisLabelVisible:true,title:""});
+      priceLines.push(pl1,pl2);
+    }
+  });
+  renderOverlayList();
+}
+function renderOverlayList(){
+  const el=$("overlayList");
+  if(!overlays.length){el.classList.remove("show");el.innerHTML="";return}
+  el.classList.add("show");
+  el.innerHTML=overlays.map((ov,i)=>{
+    if(ov.type==="hline") return `<div class="ov"><span>H ${ov.price.toFixed(2)}</span><button type="button" data-del="${i}">×</button></div>`;
+    return `<div class="ov"><span>Z ${ov.bottom.toFixed(2)}–${ov.top.toFixed(2)}</span><button type="button" data-del="${i}">×</button></div>`;
+  }).join("");
+  el.querySelectorAll("[data-del]").forEach(b=>b.onclick=()=>{
+    overlays.splice(+b.dataset.del,1);saveOverlays();redrawOverlays();
+  });
+}
+
+function setTool(t){
+  activeTool=(activeTool===t)?null:t;
+  zoneAnchor=null;
+  ["toolHline","toolZone"].forEach(id=>{
+    const b=$(id); b.setAttribute("aria-pressed", b.dataset.tool===activeTool?"true":"false");
+  });
+  const hint=$("chartHint");
+  if(activeTool==="hline"){hint.textContent="Click chart to place horizontal level";hint.classList.add("show")}
+  else if(activeTool==="zone"){hint.textContent="Click first edge of zone";hint.classList.add("show")}
+  else hint.classList.remove("show");
+}
+$("toolHline").onclick=()=>setTool("hline");
+$("toolZone").onclick=()=>setTool("zone");
+$("toolClear").onclick=()=>{overlays=[];saveOverlays();redrawOverlays();zoneAnchor=null;setTool(null)};
+$("ovOpacity").oninput=()=>redrawOverlays();
+["indMA20","indMA50","indBB","indATR"].forEach(id=>$(id).onchange=applyIndicators);
+
+chart.subscribeClick(param=>{
+  if(!activeTool||!param||param.time===undefined) return;
+  let p=null;
+  const price=param.seriesData&&param.seriesData.get(series);
+  if(price&&typeof price.close==="number") p=price.close;
+  try{
+    const yPrice=series.coordinateToPrice(param.point.y);
+    if(typeof yPrice==="number"&&!isNaN(yPrice)) p=yPrice;
+  }catch{}
+  if(p==null&&candleData.length) p=candleData[candleData.length-1].close;
+  if(p==null) return;
+
+  if(activeTool==="hline"){
+    overlays.push({type:"hline",price:+p.toFixed(3),label:p.toFixed(1)});
+    saveOverlays();redrawOverlays();
+  } else if(activeTool==="zone"){
+    if(zoneAnchor==null){
+      zoneAnchor=p;
+      $("chartHint").textContent="Click second edge of zone";
+    } else {
+      const top=Math.max(zoneAnchor,p), bottom=Math.min(zoneAnchor,p);
+      overlays.push({type:"zone",top:+top.toFixed(3),bottom:+bottom.toFixed(3),label:"zone"});
+      zoneAnchor=null;
+      saveOverlays();redrawOverlays();
+      $("chartHint").textContent="Click first edge of zone";
+    }
+  }
+});
 
 const snap=t=>Math.floor(t/step)*step;
 const fmt=d=>d.toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"});
@@ -150,7 +332,13 @@ const fmt=d=>d.toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"});
 async function loadCandles(){
   const r=await fetch(`/api/candles?granularity=${gran}&count=500`);
   if(!r.ok){$("price").textContent="check .env";return}
-  const data=await r.json(); series.setData(data); last=data[data.length-1]; markers();
+  const data=await r.json();
+  candleData=data;
+  series.setData(data);
+  last=data[data.length-1];
+  markers();
+  applyIndicators();
+  redrawOverlays();
 }
 function markers(){
   const m=[];
@@ -338,6 +526,7 @@ async function runConfirm(){
 }
 $("cfRun").onclick=runConfirm;
 
+redrawOverlays();
 loadCandles(); loadNews();
 setInterval(tick,1000); setInterval(loadNews,900000); setInterval(renderNews,60000);
 </script>
