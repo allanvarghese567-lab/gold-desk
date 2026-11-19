@@ -3,9 +3,17 @@ from contextlib import asynccontextmanager
 
 import httpx
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+
+from confirmation_engine import (
+    DEFAULT_RULE,
+    SIGNALS,
+    atr_series,
+    eval_rule,
+    run_all,
+)
 
 load_dotenv()
 TOKEN = os.getenv("OANDA_TOKEN", "")
@@ -65,21 +73,40 @@ async def lifespan(app):
 app = FastAPI(lifespan=lifespan)
 
 
+async def fetch_oanda_bars(granularity: str = "M15", count: int = 300):
+    """OHLCV bars for the confirmation engine (volume = OANDA candle volume / tick volume)."""
+    async with httpx.AsyncClient(timeout=15) as c:
+        r = await c.get(
+            f"{REST}/v3/instruments/{INSTRUMENT}/candles",
+            headers=HEAD,
+            params={"granularity": granularity, "count": min(count, 1000), "price": "M"},
+        )
+    if r.status_code != 200:
+        raise HTTPException(502, r.text)
+    bars = []
+    for k in r.json().get("candles", []):
+        m = k["mid"]
+        bars.append({
+            "o": float(m["o"]),
+            "h": float(m["h"]),
+            "l": float(m["l"]),
+            "c": float(m["c"]),
+            "v": float(k.get("volume") or 0),
+            "oi": None,
+            "time": int(float(k["time"])),
+        })
+    return bars
+
+
 @app.get("/api/candles")
 async def candles(granularity: str = "M15", count: int = 500):
     if granularity not in {"M1", "M5", "M15", "H1", "H4", "D"}:
         raise HTTPException(400, "bad granularity")
-    async with httpx.AsyncClient(timeout=15) as c:
-        r = await c.get(f"{REST}/v3/instruments/{INSTRUMENT}/candles", headers=HEAD,
-                        params={"granularity": granularity, "count": min(count, 1000), "price": "M"})
-    if r.status_code != 200:
-        raise HTTPException(502, r.text)
-    out = []
-    for k in r.json()["candles"]:
-        m = k["mid"]
-        out.append({"time": int(float(k["time"])), "open": float(m["o"]), "high": float(m["h"]),
-                    "low": float(m["l"]), "close": float(m["c"])})
-    return out
+    bars = await fetch_oanda_bars(granularity, count)
+    return [
+        {"time": b["time"], "open": b["o"], "high": b["h"], "low": b["l"], "close": b["c"]}
+        for b in bars
+    ]
 
 
 @app.get("/api/news")
@@ -115,6 +142,89 @@ async def tv_webhook(req: Request):
 @app.get("/api/signals")
 async def get_signals():
     return signals
+
+
+@app.get("/api/confirm")
+async def confirm(
+    side: str = Query("long", pattern="^(long|short)$"),
+    granularity: str = Query("M15"),
+    rule: str = Query(None),
+    stop_atr: float = Query(2.0, ge=0.3, le=5.0),
+    rr: float = Query(2.0, ge=1.0, le=10.0),
+):
+    """Run the confirmation engine on live OANDA XAU_USD bars."""
+    if granularity not in {"M5", "M15", "H1", "H4", "D"}:
+        raise HTTPException(400, "granularity must be M5, M15, H1, H4, or D")
+    if not TOKEN:
+        raise HTTPException(503, "OANDA_TOKEN not configured")
+
+    bars = await fetch_oanda_bars(granularity, 300)
+    if len(bars) < 60:
+        raise HTTPException(502, "not enough candles from OANDA")
+
+    atr = atr_series(bars)[-1]
+    if not atr or atr <= 0:
+        raise HTTPException(502, "ATR unavailable")
+
+    entry = bars[-1]["c"]
+    s = 1 if side == "long" else -1
+    stop = entry - s * stop_atr * atr
+    target = entry + s * rr * stop_atr * atr
+    ctx = {"entry": entry, "stop": stop, "target": target}
+
+    use_rule = rule or DEFAULT_RULE
+    try:
+        results = run_all(bars, s, ctx)
+        decision = eval_rule(use_rule, results)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+    total_w = sum(w for (_, _, _, w) in SIGNALS.values())
+    got_w = sum(SIGNALS[c][3] for c, v in results.items() if v)
+    cats = sorted({c.split("_")[0] for c, v in results.items() if v and not c.startswith("R_")})
+
+    checks = [
+        {
+            "code": code,
+            "ok": bool(results[code]),
+            "desc": SIGNALS[code][1],
+            "weight": SIGNALS[code][3],
+            "category": code.split("_")[0],
+        }
+        for code in SIGNALS
+    ]
+
+    return {
+        "side": side,
+        "granularity": granularity,
+        "entry": round(entry, 3),
+        "stop": round(stop, 3),
+        "target": round(target, 3),
+        "atr": round(atr, 3),
+        "stop_atr": stop_atr,
+        "rr": rr,
+        "rule": use_rule,
+        "decision": "ENTER" if decision else "WAIT",
+        "score": round(got_w, 2),
+        "score_max": round(total_w, 2),
+        "score_pct": round(100 * got_w / total_w, 1) if total_w else 0,
+        "categories": cats,
+        "checks": checks,
+        "bar_count": len(bars),
+        "bar_time": bars[-1]["time"],
+    }
+
+
+@app.get("/api/confirm/codes")
+async def confirm_codes():
+    """List available confirmation codes and the default rule."""
+    return {
+        "default_rule": DEFAULT_RULE,
+        "codes": [
+            {"code": code, "desc": desc, "need": need, "weight": weight, "category": code.split("_")[0]}
+            for code, (_, desc, need, weight) in SIGNALS.items()
+        ],
+    }
 
 
 @app.get("/stream")
