@@ -39,6 +39,7 @@ h2{font-size:14px;margin:0;padding:10px 14px;border-bottom:1px solid var(--line)
 .iframe-section{margin-top:14px}
 .iframe-bar{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-bottom:8px}
 .iframe-bar .label{color:var(--mute);font-size:13px;margin-right:4px}
+.iframe-bar .spacer{flex:1}
 .iframe-frame-wrap{position:relative;background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden;height:62vh;min-height:380px}
 .iframe-frame-wrap iframe{width:100%;height:100%;border:0;display:block;background:#fff}
 .iframe-fallback{position:absolute;inset:0;display:none;flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:24px;text-align:center;background:var(--panel);color:var(--mute)}
@@ -48,6 +49,10 @@ h2{font-size:14px;margin:0;padding:10px 14px;border-bottom:1px solid var(--line)
 .add-form.show{display:flex}
 .add-form input{font:inherit;padding:6px 10px;border:1px solid var(--line);border-radius:8px;background:var(--panel);color:var(--ink);min-width:140px}
 .add-form input.url{min-width:220px;flex:1}
+.iframe-section:fullscreen{margin:0;padding:12px;background:var(--bg);display:flex;flex-direction:column;height:100%}
+.iframe-section:fullscreen .iframe-frame-wrap{flex:1;height:auto;min-height:0;border-radius:0}
+.iframe-section:-webkit-full-screen{margin:0;padding:12px;background:var(--bg);display:flex;flex-direction:column;height:100%}
+.iframe-section:-webkit-full-screen .iframe-frame-wrap{flex:1;height:auto;min-height:0;border-radius:0}
 </style>
 </head>
 <body>
@@ -80,6 +85,8 @@ h2{font-size:14px;margin:0;padding:10px 14px;border-bottom:1px solid var(--line)
     <div class="iframe-bar" id="iframeBar">
       <span class="label">Workspace</span>
       <button type="button" class="ghost" id="btnAdd" title="Add custom link">+ Add</button>
+      <span class="spacer"></span>
+      <button type="button" class="ghost" id="btnFs" title="Full screen">⛶ Full screen</button>
     </div>
     <div class="add-form" id="addForm">
       <input type="text" id="addName" placeholder="Name (e.g. My chart)" maxlength="24">
@@ -262,6 +269,24 @@ $("addSave").onclick=()=>{
 
 renderBar();
 if(activeId) selectLink(activeId);
+
+const fsSection = document.querySelector(".iframe-section");
+const btnFs = $("btnFs");
+function isFs(){
+  return document.fullscreenElement === fsSection || document.webkitFullscreenElement === fsSection;
+}
+function updateFsBtn(){
+  btnFs.textContent = isFs() ? "✕ Exit full screen" : "⛶ Full screen";
+}
+btnFs.onclick = ()=>{
+  if(isFs()){
+    (document.exitFullscreen||document.webkitExitFullscreen).call(document);
+  } else {
+    (fsSection.requestFullscreen||fsSection.webkitRequestFullscreen).call(fsSection);
+  }
+};
+document.addEventListener("fullscreenchange", updateFsBtn);
+document.addEventListener("webkitfullscreenchange", updateFsBtn);
 
 loadCandles(); loadNews();
 setInterval(tick,1000); setInterval(loadNews,900000); setInterval(renderNews,60000);
