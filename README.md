@@ -11,19 +11,22 @@ Live gold chart + Forex Factory red/orange/yellow USD news + TradingView alert s
 4. `uvicorn main:app --reload`
 5. Open http://localhost:8000
 
-## TradingView alerts (optional, needs a paid TradingView plan)
-Webhooks need a public HTTPS URL. Use the live URL above or for local testing use `ngrok http 8000`.
-
-In a TradingView alert set Webhook URL to:
-
+## TradingView alerts (optional)
+Webhook URL (live):
 ```
 https://gold-desk-ffm8.onrender.com/webhook/tv
 ```
-
-and the message to:
-
+Message example:
 ```json
 {"secret":"golddesk123","side":"buy","price":"{{close}}","note":"my setup","tf":"{{interval}}"}
 ```
 
-Alerts appear in the Signals panel and as arrows on the chart.
+## Confirmation engine
+
+Live checklist of price / volume / trend / momentum / volatility / multi-TF / risk filters on OANDA XAU/USD bars.
+
+- API: `GET /api/confirm?side=long&granularity=M15`
+- Codes list: `GET /api/confirm/codes`
+- Default rule: `(P_CLOSE or P_RETEST) and CATS(3) and R_RR`
+
+UI: sidebar panel → pick Long/Short + timeframe → **Run**.
