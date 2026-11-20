@@ -144,7 +144,7 @@ async def candles(granularity: str = "M15", count: int = 500, instrument: str | 
         raise HTTPException(400, "bad granularity")
     bars = await fetch_oanda_bars(granularity, count, instrument)
     return [
-        {"time": b["time"], "open": b["o"], "high": b["h"], "low": b["l"], "close": b["c"]}
+        {"time": b["time"], "open": b["o"], "high": b["h"], "low": b["l"], "close": b["c"], "volume": b["v"]}
         for b in bars
     ]
 
