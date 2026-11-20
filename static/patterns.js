@@ -1,7 +1,8 @@
-/* Candlestick pattern analysis — independent timeframe per panel */
+/* Candlestick pattern analysis — independent TF + FVG / BAG */
 let miniSingle, miniDual, miniMulti;
 const patternGran = { single: "M15", dual: "M15", multi: "M15" };
 const patternCache = { single: null, dual: null, multi: null };
+const zoneLines = { single: [], dual: [], multi: [] };
 
 function mkMiniChart(el){
   const c = LightweightCharts.createChart(el, {
@@ -106,14 +107,76 @@ function detectMulti(data){
   return out.slice(-12);
 }
 
+function detectFVG(data){
+  const out = [];
+  const n = data.length;
+  for (let i = Math.max(2, n - 100); i < n; i++){
+    const a = data[i - 2], b = data[i - 1], c = data[i];
+    if (a.high < c.low){
+      const top = c.low, bottom = a.high;
+      if ((top - bottom) / Math.max(range(b), 1e-9) > 0.05)
+        out.push({ i, time: b.time, name: "FVG", bias: "bull", note: "bullish imbalance " + bottom.toFixed(2) + "–" + top.toFixed(2), top, bottom });
+    }
+    if (c.high < a.low){
+      const top = a.low, bottom = c.high;
+      if ((top - bottom) / Math.max(range(b), 1e-9) > 0.05)
+        out.push({ i, time: b.time, name: "FVG", bias: "bear", note: "bearish imbalance " + bottom.toFixed(2) + "–" + top.toFixed(2), top, bottom });
+    }
+  }
+  return out.slice(-8);
+}
+
+function detectBAG(data){
+  const out = [];
+  const n = data.length;
+  for (let i = Math.max(1, n - 100); i < n; i++){
+    const a = data[i - 1], b = data[i];
+    if (b.low > a.high){
+      const gap = b.low - a.high;
+      if (gap / range(a) > 0.08 && isBull(b) && body(b) / range(b) > 0.5)
+        out.push({ i, time: b.time, name: "BAG", bias: "bull", note: "bull breakaway gap +" + gap.toFixed(2), top: b.low, bottom: a.high });
+    }
+    if (b.high < a.low){
+      const gap = a.low - b.high;
+      if (gap / range(a) > 0.08 && !isBull(b) && body(b) / range(b) > 0.5)
+        out.push({ i, time: b.time, name: "BAG", bias: "bear", note: "bear breakaway gap -" + gap.toFixed(2), top: a.low, bottom: b.high });
+    }
+  }
+  return out.slice(-8);
+}
+
 function patternMarkers(list){
   return list.map(p => ({
     time: p.time,
     position: p.bias === "bull" ? "belowBar" : "aboveBar",
-    shape: p.bias === "bull" ? "arrowUp" : (p.bias === "bear" ? "arrowDown" : "circle"),
+    shape: p.name === "FVG" ? "square" : (p.name === "BAG" ? "circle" : (p.bias === "bull" ? "arrowUp" : (p.bias === "bear" ? "arrowDown" : "circle"))),
     color: p.bias === "bull" ? "#1f8a5b" : (p.bias === "bear" ? "#c8403a" : "#8a5a00"),
     text: p.name
   })).sort((a, b) => a.time - b.time);
+}
+
+function clearZones(kind){
+  const mini = kind === "single" ? miniSingle : (kind === "dual" ? miniDual : miniMulti);
+  if (!mini) return;
+  (zoneLines[kind] || []).forEach(pl => { try { mini.series.removePriceLine(pl) } catch {} });
+  zoneLines[kind] = [];
+}
+
+function drawZones(kind, zones){
+  const mini = kind === "single" ? miniSingle : (kind === "dual" ? miniDual : miniMulti);
+  if (!mini) return;
+  clearZones(kind);
+  zones.slice(-6).forEach(z => {
+    if (z.top == null || z.bottom == null) return;
+    const col = z.bias === "bull" ? "rgba(31,138,91,0.55)" : "rgba(200,64,58,0.55)";
+    const title = z.name + (z.bias === "bull" ? " ↑" : " ↓");
+    zoneLines[kind].push(mini.series.createPriceLine({
+      price: z.top, color: col, lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title
+    }));
+    zoneLines[kind].push(mini.series.createPriceLine({
+      price: z.bottom, color: col, lineWidth: 1, lineStyle: 2, axisLabelVisible: false, title: ""
+    }));
+  });
 }
 
 function renderPatternList(el, list){
@@ -126,12 +189,31 @@ function renderPatternList(el, list){
 function applyPanel(kind, data){
   const view = data.slice(-120);
   let list, mini, listEl;
-  if (kind === "single"){ list = detectSingle(view); mini = miniSingle; listEl = $("listSingle") }
-  else if (kind === "dual"){ list = detectDual(view); mini = miniDual; listEl = $("listDual") }
-  else { list = detectMulti(view); mini = miniMulti; listEl = $("listMulti") }
+  const fvg = detectFVG(view);
+  const bag = detectBAG(view);
+  if (kind === "single"){
+    list = detectSingle(view).concat(bag.slice(-4));
+    mini = miniSingle; listEl = $("listSingle");
+  } else if (kind === "dual"){
+    list = detectDual(view).concat(bag.slice(-4)).concat(fvg.slice(-3));
+    mini = miniDual; listEl = $("listDual");
+  } else {
+    list = detectMulti(view).concat(fvg.slice(-5)).concat(bag.slice(-3));
+    mini = miniMulti; listEl = $("listMulti");
+  }
+  const seen = new Set();
+  list = list.filter(p => {
+    const k = p.name + ":" + p.time;
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  }).slice(-14);
+
   mini.series.setData(view);
   mini.series.setMarkers(patternMarkers(list));
   renderPatternList(listEl, list);
+  const zones = fvg.concat(bag).filter(z => z.top != null);
+  drawZones(kind, zones);
   try { mini.chart.timeScale().fitContent() } catch {}
 }
 
@@ -158,5 +240,4 @@ function refreshAllPatternCharts(){
   loadPatternPanel("multi");
 }
 
-/* back-compat alias */
 function updatePatternCharts(data){ refreshAllPatternCharts() }
