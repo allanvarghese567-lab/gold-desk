@@ -22,13 +22,30 @@ SECRET = os.getenv("TV_WEBHOOK_SECRET", "")
 ENV = os.getenv("OANDA_ENV", "practice")
 REST = "https://api-fxpractice.oanda.com" if ENV == "practice" else "https://api-fxtrade.oanda.com"
 STREAM = "https://stream-fxpractice.oanda.com" if ENV == "practice" else "https://stream-fxtrade.oanda.com"
-INSTRUMENT = "XAU_USD"
+# XAU_USD first on purpose — default for Gold Desk
+INSTRUMENTS = [
+    "XAU_USD",
+    "EUR_USD", "GBP_USD", "USD_JPY", "USD_CHF", "AUD_USD", "NZD_USD", "USD_CAD",
+    "EUR_JPY", "GBP_JPY", "EUR_GBP", "AUD_JPY", "XAG_USD",
+]
+INSTRUMENT = INSTRUMENTS[0]
 FF_FEED = "https://nfs.faireconomy.media/ff_calendar_thisweek.json"
 HEAD = {"Authorization": f"Bearer {TOKEN}", "Accept-Datetime-Format": "UNIX"}
 
 subscribers: set[asyncio.Queue] = set()
 signals: list[dict] = []
 news_cache = {"at": 0.0, "data": []}
+
+
+def normalize_instrument(raw: str | None) -> str:
+    if not raw:
+        return INSTRUMENT
+    key = raw.strip().upper().replace("/", "_").replace("-", "_").replace(" ", "_")
+    if "_" not in key and len(key) == 6:
+        key = key[:3] + "_" + key[3:]
+    if key not in INSTRUMENTS:
+        raise HTTPException(400, f"unsupported instrument: {raw}")
+    return key
 
 
 def publish(kind: str, payload: dict):
@@ -40,12 +57,13 @@ def publish(kind: str, payload: dict):
 
 
 async def price_stream():
-    """Keep one streaming connection to OANDA and fan ticks out to browsers."""
+    """Stream all desk instruments; each tick includes instrument code."""
     url = f"{STREAM}/v3/accounts/{ACCOUNT}/pricing/stream"
+    joined = ",".join(INSTRUMENTS)
     while True:
         try:
             async with httpx.AsyncClient(timeout=None) as c:
-                async with c.stream("GET", url, headers=HEAD, params={"instruments": INSTRUMENT}) as r:
+                async with c.stream("GET", url, headers=HEAD, params={"instruments": joined}) as r:
                     r.raise_for_status()
                     async for line in r.aiter_lines():
                         if not line:
@@ -54,7 +72,16 @@ async def price_stream():
                         if d.get("type") != "PRICE" or not d.get("bids") or not d.get("asks"):
                             continue
                         bid, ask = float(d["bids"][0]["price"]), float(d["asks"][0]["price"])
-                        publish("tick", {"t": int(time.time()), "bid": bid, "ask": ask, "mid": round((bid + ask) / 2, 3)})
+                        ins = d.get("instrument") or INSTRUMENT
+                        decimals = 3 if ins.startswith("XAU") or ins.startswith("XAG") else (3 if ins.endswith("JPY") else 5)
+                        mid = round((bid + ask) / 2, decimals)
+                        publish("tick", {
+                            "t": int(time.time()),
+                            "instrument": ins,
+                            "bid": bid,
+                            "ask": ask,
+                            "mid": mid,
+                        })
         except Exception as e:
             print("stream error, retrying in 5s:", e)
             await asyncio.sleep(5)
@@ -73,11 +100,12 @@ async def lifespan(app):
 app = FastAPI(lifespan=lifespan)
 
 
-async def fetch_oanda_bars(granularity: str = "M15", count: int = 300):
-    """OHLCV bars for the confirmation engine (volume = OANDA candle volume / tick volume)."""
+async def fetch_oanda_bars(granularity: str = "M15", count: int = 300, instrument: str | None = None):
+    """OHLCV bars for chart + confirmation engine."""
+    ins = normalize_instrument(instrument)
     async with httpx.AsyncClient(timeout=15) as c:
         r = await c.get(
-            f"{REST}/v3/instruments/{INSTRUMENT}/candles",
+            f"{REST}/v3/instruments/{ins}/candles",
             headers=HEAD,
             params={"granularity": granularity, "count": min(count, 1000), "price": "M"},
         )
@@ -98,11 +126,23 @@ async def fetch_oanda_bars(granularity: str = "M15", count: int = 300):
     return bars
 
 
+@app.get("/api/instruments")
+async def list_instruments():
+    """XAU_USD first, then major FX / silver."""
+    return {
+        "default": INSTRUMENT,
+        "instruments": [
+            {"id": i, "label": i.replace("_", "/")}
+            for i in INSTRUMENTS
+        ],
+    }
+
+
 @app.get("/api/candles")
-async def candles(granularity: str = "M15", count: int = 500):
+async def candles(granularity: str = "M15", count: int = 500, instrument: str | None = None):
     if granularity not in {"M1", "M5", "M15", "H1", "H4", "D"}:
         raise HTTPException(400, "bad granularity")
-    bars = await fetch_oanda_bars(granularity, count)
+    bars = await fetch_oanda_bars(granularity, count, instrument)
     return [
         {"time": b["time"], "open": b["o"], "high": b["h"], "low": b["l"], "close": b["c"]}
         for b in bars
@@ -126,8 +166,6 @@ async def news():
 
 @app.post("/webhook/tv")
 async def tv_webhook(req: Request):
-    """TradingView alert message example:
-    {\"secret\":\"change-me\",\"side\":\"buy\",\"price\":\"{{close}}\",\"note\":\"RSI cross\",\"tf\":\"{{interval}}\"}"""
     body = await req.json()
     if SECRET and body.get("secret") != SECRET:
         raise HTTPException(401, "bad secret")
@@ -151,14 +189,16 @@ async def confirm(
     rule: str = Query(None),
     stop_atr: float = Query(2.0, ge=0.3, le=5.0),
     rr: float = Query(2.0, ge=1.0, le=10.0),
+    instrument: str | None = None,
 ):
-    """Run the confirmation engine on live OANDA XAU_USD bars."""
+    """Run the confirmation engine on live OANDA bars for the selected instrument."""
     if granularity not in {"M5", "M15", "H1", "H4", "D"}:
         raise HTTPException(400, "granularity must be M5, M15, H1, H4, or D")
     if not TOKEN:
         raise HTTPException(503, "OANDA_TOKEN not configured")
 
-    bars = await fetch_oanda_bars(granularity, 300)
+    ins = normalize_instrument(instrument)
+    bars = await fetch_oanda_bars(granularity, 300, ins)
     if len(bars) < 60:
         raise HTTPException(502, "not enough candles from OANDA")
 
@@ -195,6 +235,7 @@ async def confirm(
     ]
 
     return {
+        "instrument": ins,
         "side": side,
         "granularity": granularity,
         "entry": round(entry, 3),
@@ -217,7 +258,6 @@ async def confirm(
 
 @app.get("/api/confirm/codes")
 async def confirm_codes():
-    """List available confirmation codes and the default rule."""
     return {
         "default_rule": DEFAULT_RULE,
         "codes": [
