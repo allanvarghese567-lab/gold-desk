@@ -26,7 +26,7 @@ h2{font-size:14px;margin:0;padding:10px 14px;border-bottom:1px solid var(--line)
 #confirmList{max-height:280px;overflow-y:auto}.chk{display:grid;grid-template-columns:28px 1fr;gap:8px;padding:8px 14px;border-bottom:1px solid var(--line);font-size:13px}
 .chk .mark{width:22px;height:22px;border-radius:6px;display:inline-flex;align-items:center;justify-content:center;font-weight:700}
 .chk.ok .mark{color:#fff;background:var(--up)}.chk.no .mark{color:var(--mute);border:1px solid var(--line)}
-.pattern-section{margin-top:14px}.pattern-section h2.sec{font-size:14px;margin:0 0 8px;color:var(--mute);font-weight:600}
+.pattern-section{margin-top:14px}.pattern-section h2.sec{font-size:14px;margin:0 0 6px;color:var(--mute);font-weight:600}
 .pattern-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}@media(max-width:1000px){.pattern-grid{grid-template-columns:1fr}}
 .pattern-panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden}
 .pattern-panel .ph{padding:10px 12px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between}
@@ -40,12 +40,12 @@ h2{font-size:14px;margin:0;padding:10px 14px;border-bottom:1px solid var(--line)
 .pattern-list .empty{padding:10px 12px;color:var(--mute)}
 .ob-section .pattern-chart{height:260px}.ob-section .pattern-list{max-height:180px}
 .profile-section .pattern-chart{height:280px}.profile-modes{display:flex;flex-wrap:wrap;gap:6px;padding:6px 10px;border-bottom:1px solid var(--line)}
-.crt-section .pattern-chart{height:280px}.crt-section .pattern-list{max-height:220px}.tag-tbs{background:rgba(224,176,74,.28);color:#e0b04a}
+.crt-section .pattern-chart{height:280px}.crt-section .pattern-list{max-height:220px}.tag-tbs{background:rgba(224,176,74,.28);color:#e0b04a}.tag-range{background:rgba(232,185,35,.25);color:#e8b923}
 .structure-section .pattern-chart{height:280px}.structure-section .pattern-list{max-height:220px}
 .tag-bos-bull{background:rgba(31,138,91,.2);color:var(--up)}.tag-bos-bear{background:rgba(200,64,58,.18);color:var(--down)}
 .tag-choch-bull{background:rgba(31,138,91,.35);color:var(--up)}.tag-choch-bear{background:rgba(200,64,58,.35);color:var(--down)}
 .choch-blink .tag{animation:chochPulse 1.4s ease-in-out infinite}@keyframes chochPulse{0%,100%{opacity:1}50%{opacity:.55}}
-.edu-note{font-size:12px;color:var(--mute);margin:0 0 12px;line-height:1.45}
+.edu-note{font-size:12px;color:var(--mute);margin:0 0 10px;line-height:1.5}
 .iframe-section{margin-top:14px}.iframe-bar{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-bottom:8px}
 .iframe-frame-wrap{position:relative;background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden;height:50vh;min-height:280px}
 .iframe-frame-wrap iframe{width:100%;height:100%;border:0}
@@ -64,15 +64,25 @@ h2{font-size:14px;margin:0;padding:10px 14px;border-bottom:1px solid var(--line)
 <button data-g="H4" data-s="14400">4h</button><button data-g="D" data-s="86400">1D</button>
 </div>
 <div class="grid">
-<section class="panel"><div class="analysis-bar">Main chart · live OANDA</div><div id="chart"></div></section>
+<section class="panel">
+<div class="analysis-bar">Main chart · live OANDA · where price is right now</div>
+<div id="chart"></div>
+</section>
 <aside>
 <div class="panel" style="margin-bottom:12px">
 <div class="next"><small>Next red-folder USD event</small><b id="cd">--:--:--</b><div id="nt" style="color:var(--mute)">Loading…</div></div>
-<h2>USD news this week</h2><div id="news"></div>
+<h2>USD news this week</h2>
+<p class="edu-note" style="padding:0 14px;margin:8px 0">High-impact news can spike volatility. Use the countdown to avoid trading right into a release.</p>
+<div id="news"></div>
 </div>
-<div class="panel" style="margin-bottom:12px"><h2>TradingView signals</h2><div id="sigs"><div class="msg">No alerts yet.</div></div></div>
+<div class="panel" style="margin-bottom:12px">
+<h2>TradingView signals</h2>
+<p class="edu-note" style="padding:0 14px;margin:8px 0">Alerts from your TradingView webhooks. External triggers logged on this desk.</p>
+<div id="sigs"><div class="msg">No alerts yet.</div></div>
+</div>
 <div class="panel">
 <h2>Confirmation engine</h2>
+<p class="edu-note" style="padding:0 14px;margin:8px 0">Scores a long or short idea against your rules. High score = more agreement, not a guarantee. Check entry · SL · TP and each yes/no line.</p>
 <div class="confirm-head">
 <select id="cfSide"><option value="long">Long</option><option value="short">Short</option></select>
 <select id="cfGran"><option value="M15">15m</option><option value="M5">5m</option><option value="H1">1h</option><option value="H4">4h</option><option value="D">1D</option></select>
@@ -86,6 +96,7 @@ h2{font-size:14px;margin:0;padding:10px 14px;border-bottom:1px solid var(--line)
 
 <section class="pattern-section">
 <h2 class="sec">Candlestick analysis · FVG · BAG</h2>
+<p class="edu-note"><b>One-candle</b> = single-bar patterns (doji, hammer). <b>Two-candle</b> = pairs + FVG gaps. <b>Multiple</b> = 3+ bars. FVG = fast move left a gap; BAG = breakaway gap. Use for timing, not full bias alone.</p>
 <div class="pattern-grid">
 <div class="pattern-panel" data-kind="single"><div class="ph"><b>One-candlestick</b><span>single · BAG</span></div>
 <div class="pattern-tfs" data-kind="single"><button type="button" data-g="M5">5m</button><button type="button" data-g="M15" aria-pressed="true">15m</button><button type="button" data-g="H1">1h</button><button type="button" data-g="H4">4h</button><button type="button" data-g="D">1D</button></div>
@@ -101,6 +112,7 @@ h2{font-size:14px;margin:0;padding:10px 14px;border-bottom:1px solid var(--line)
 
 <section class="ob-section pattern-section">
 <h2 class="sec">Order blocks · six-rule filter</h2>
+<p class="edu-note">Zones where larger orders may rest. Only blocks that pass all six rules are shown. Price often revisits these areas — possible support/resistance, not guaranteed turns.</p>
 <div class="pattern-grid" style="grid-template-columns:1fr"><div class="pattern-panel" data-kind="ob">
 <div class="ph"><b>Valid order blocks</b><span>six rules</span></div>
 <div class="pattern-tfs" data-kind="ob"><button type="button" data-g="M15" aria-pressed="true">15m</button><button type="button" data-g="H1">1h</button><button type="button" data-g="H4">4h</button><button type="button" data-g="D">1D</button></div>
@@ -110,6 +122,7 @@ h2{font-size:14px;margin:0;padding:10px 14px;border-bottom:1px solid var(--line)
 
 <section class="profile-section pattern-section">
 <h2 class="sec">Footprint · Volume Profile</h2>
+<p class="edu-note"><b>Volume Profile</b> = where most volume traded (POC, value area). <b>Footprint</b> = rough buy/sell pressure per bar. High-volume prices can act like magnets; low-volume areas can move fast.</p>
 <div class="pattern-grid" style="grid-template-columns:1fr"><div class="pattern-panel" data-kind="profile">
 <div class="ph"><b>Order flow</b><span>VP · footprint</span></div>
 <div class="profile-modes"><button type="button" data-mode="vp" aria-pressed="true">Volume Profile</button><button type="button" data-mode="footprint">Footprint</button></div>
@@ -120,9 +133,9 @@ h2{font-size:14px;margin:0;padding:10px 14px;border-bottom:1px solid var(--line)
 
 <section class="structure-section pattern-section">
 <h2 class="sec">Market structure · BOS · CHoCH</h2>
-<p class="edu-note"><b>BOS</b> = trend may continue. <b>CHoCH</b> = trend may change. Candle <b>close</b> counts.</p>
+<p class="edu-note"><b>Green</b> = up · <b>Red</b> = down · <b>Yellow RANGE</b> = sideways (warning). <b>BOS</b> = trend may continue. <b>CHoCH</b> (blinks) = trend may change. Only a candle <b>close</b> beyond the level counts — not a wick alone.</p>
 <div class="pattern-grid" style="grid-template-columns:1fr"><div class="pattern-panel" data-kind="structure">
-<div class="ph"><b>BOS / CHoCH</b><span>green=up · red=down · blink=CHoCH</span></div>
+<div class="ph"><b>BOS / CHoCH</b><span>green=up · red=down · yellow=range · blink=CHoCH</span></div>
 <div class="pattern-tfs structure-tfs" data-kind="structure"><button type="button" data-g="M15">15m</button><button type="button" data-g="H1" aria-pressed="true">1h</button><button type="button" data-g="H4">4h</button><button type="button" data-g="D">1D</button></div>
 <div class="pattern-chart" id="chartStructure"></div><div class="pattern-list" id="listStructure"><div class="empty">Loading…</div></div>
 </div></div>
@@ -130,9 +143,9 @@ h2{font-size:14px;margin:0;padding:10px 14px;border-bottom:1px solid var(--line)
 
 <section class="crt-section pattern-section">
 <h2 class="sec">CRT · TBS · Candle Range Theory</h2>
-<p class="edu-note"><b>CRT</b> = candle range; next bar sweeps <em>one</em> side and closes inside. <b>TBS</b> = Turtle Body Soup (false break). Green/red = bias · <b>TBS blinks</b>.</p>
+<p class="edu-note"><b>CRT</b> = one candle’s high/low is the range; next bar sweeps <em>one</em> side and closes back inside — bias toward the other side. <b>TBS</b> (gold, blinks) = Turtle Body Soup: false break, body closes back. <b>Yellow RANGE</b> = sideways warning. Lines = CRT high, low, 50%.</p>
 <div class="pattern-grid" style="grid-template-columns:1fr"><div class="pattern-panel" data-kind="crt">
-<div class="ph"><b>CRT + TBS</b><span>range block · sweep · TBS blink</span></div>
+<div class="ph"><b>CRT + TBS</b><span>range block · sweep · TBS blink · yellow=sideways</span></div>
 <div class="pattern-tfs crt-tfs" data-kind="crt">
 <button type="button" data-g="M15">15m</button>
 <button type="button" data-g="H1" aria-pressed="true">1h</button>
@@ -147,7 +160,7 @@ h2{font-size:14px;margin:0;padding:10px 14px;border-bottom:1px solid var(--line)
 <div id="eduMount"></div>
 
 <section class="iframe-section">
-<div class="iframe-bar"><span style="color:var(--mute);font-size:13px">Workspace</span>
+<div class="iframe-bar"><span style="color:var(--mute);font-size:13px">Workspace · open TradingView or Forex Factory inside the desk</span>
 <button type="button" id="btnTv">TradingView</button><button type="button" id="btnFf">Forex Factory</button>
 <button type="button" class="ghost" id="btnFs">Full screen</button></div>
 <div class="iframe-frame-wrap"><iframe id="deskFrame" title="Workspace"></iframe></div>
