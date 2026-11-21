@@ -1,4 +1,4 @@
-/* BOS / CHoCH — semi-transparent zone blocks; candle close confirms */
+/* BOS / CHoCH + RANGE warning (sideways) */
 let structureChart, structureSeries, structureGran = "H1";
 let structureLines = [];
 let structureData = [];
@@ -107,6 +107,30 @@ function detectBosChoch(data){
   return out.slice(-20);
 }
 
+function detectRangeStructure(data){
+  if (!data || data.length < 40) return null;
+  const slice = data.slice(-40);
+  const hi = Math.max(...slice.map(c => c.high));
+  const lo = Math.min(...slice.map(c => c.low));
+  if (hi <= lo) return null;
+  const avgBody = slice.reduce((s, c) => s + Math.abs(c.close - c.open), 0) / slice.length;
+  const width = hi - lo;
+  if (avgBody <= 0) return null;
+  const nearHi = slice.filter(c => c.high >= hi - width * 0.15).length;
+  const nearLo = slice.filter(c => c.low <= lo + width * 0.15).length;
+  const mid = (hi + lo) / 2;
+  const crosses = slice.filter(c => (c.low < mid && c.high > mid)).length;
+  if (nearHi >= 3 && nearLo >= 3 && crosses >= 8 && width < avgBody * 25){
+    return {
+      kind: "RANGE", type: "RANGE", bias: "sideways",
+      time: slice[0].time, endTime: slice[slice.length - 1].time,
+      top: hi, bottom: lo, level: mid, high: hi, low: lo,
+      note: "Sideways / range — no clear trend · warning"
+    };
+  }
+  return null;
+}
+
 function ensureStructureOverlay(){
   const host = $("chartStructure");
   if (!host) return null;
@@ -131,17 +155,15 @@ function drawStructureBlocks(){
   const ctx = cv.getContext("2d");
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, rect.width, rect.height);
-
   const events = structureLastEvents || [];
   const data = structureLastData || [];
   if (!events.length || !data.length) return;
-
   const ts = structureChart.timeScale();
   const lastTime = data[data.length - 1].time;
-
   events.forEach(e => {
     const bull = e.bias === "bull";
     const isCh = e.type === "CHoCH";
+    const isRange = e.kind === "RANGE" || e.bias === "sideways";
     const top = e.top != null ? e.top : e.level;
     const bottom = e.bottom != null ? e.bottom : e.level;
     let hi = Math.max(top, bottom);
@@ -151,56 +173,39 @@ function drawStructureBlocks(){
       hi = e.level + pad;
       lo = e.level - pad;
     }
-
     const x1 = ts.timeToCoordinate(e.time);
-    const x2 = ts.timeToCoordinate(lastTime);
+    const x2 = ts.timeToCoordinate(e.endTime != null ? e.endTime : lastTime);
     const y1 = structureSeries.priceToCoordinate(hi);
     const y2 = structureSeries.priceToCoordinate(lo);
     if (x1 == null || y1 == null || y2 == null) return;
-
     const left = Math.min(x1, x2 != null ? x2 : x1 + 40);
     const right = Math.max(x1, x2 != null ? x2 : x1 + 40);
     const topY = Math.min(y1, y2);
     const botY = Math.max(y1, y2);
     const w = Math.max(4, right - left);
     const h = Math.max(3, botY - topY);
-
-    // Trend color: green=up, red=down
-    const base = bull ? [31, 138, 91] : [200, 64, 58];
-    // BOS: solid highlighted block
-    // CHoCH: same trend color, always blinks
+    const base = isRange ? [232, 185, 35] : (bull ? [31, 138, 91] : [200, 64, 58]);
     let a;
-    if (isCh) {
+    if (isRange) a = 0.14 + 0.08 * Math.sin(Date.now() / 600);
+    else if (isCh) {
       const t = (Date.now() % 700) / 700;
       const wave = t < 0.5 ? t * 2 : (1 - t) * 2;
       a = 0.12 + 0.32 * wave;
-    } else {
-      a = 0.28;
-    }
+    } else a = 0.28;
     ctx.fillStyle = `rgba(${base[0]},${base[1]},${base[2]},${a})`;
     ctx.fillRect(left, topY, w, h);
-
     let ba;
-    if (isCh) {
+    if (isRange || isCh) {
       const t = (Date.now() % 700) / 700;
       const wave = t < 0.5 ? t * 2 : (1 - t) * 2;
-      ba = 0.40 + 0.55 * wave;
-    } else {
-      ba = 0.92;
-    }
+      ba = 0.40 + 0.50 * wave;
+    } else ba = 0.92;
     ctx.strokeStyle = `rgba(${base[0]},${base[1]},${base[2]},${ba})`;
     ctx.lineWidth = 2;
     ctx.strokeRect(left + 0.5, topY + 0.5, w - 1, h - 1);
-
-    if (isCh && a > 0.30) {
-      ctx.strokeStyle = `rgba(${base[0]},${base[1]},${base[2]},0.35)`;
-      ctx.lineWidth = 4;
-      ctx.strokeRect(left - 1, topY - 1, w + 2, h + 2);
-    }
-
     ctx.font = "bold 10px system-ui,sans-serif";
     ctx.fillStyle = `rgba(${base[0]},${base[1]},${base[2]},0.98)`;
-    const label = e.type;
+    const label = isRange ? "RANGE" : e.type;
     const tw = ctx.measureText(label).width;
     if (w > tw + 8 && h > 12) ctx.fillText(label, left + 4, topY + 11);
   });
@@ -213,11 +218,10 @@ function applyStructure(data, events){
     time: c.time, open: c.open, high: c.high, low: c.low, close: c.close
   })));
   structureSeries.setMarkers([]);
-
   const recent = events.slice(-10);
-  structureLastEvents = recent;
+  const rangeEv = detectRangeStructure(data);
+  structureLastEvents = rangeEv ? [...recent, rangeEv] : recent;
   structureLastData = data;
-
   if (recent.length){
     const e = recent[recent.length - 1];
     const bull = e.bias === "bull";
@@ -233,26 +237,28 @@ function applyStructure(data, events){
       title: e.type
     }));
   }
-
   drawStructureBlocks();
   try { structureChart.timeScale().fitContent(); } catch(e){}
   setTimeout(drawStructureBlocks, 50);
   setTimeout(drawStructureBlocks, 200);
-
   const list = $("listStructure");
   if (list){
-    if (!events.length){
+    const all = structureLastEvents;
+    if (!all.length){
       list.innerHTML = '<div class="empty">No BOS / CHoCH yet on this timeframe. Needs clear swing highs & lows and a candle <b>close</b> beyond them.</div>';
     } else {
-      list.innerHTML = events.slice().reverse().map(e => {
+      list.innerHTML = all.slice().reverse().map(e => {
         const bull = e.bias === "bull";
         const isCh = e.type === "CHoCH";
-        const tag = isCh ? (bull ? "tag-choch-bull" : "tag-choch-bear") : (bull ? "tag-bos-bull" : "tag-bos-bear");
+        const isRange = e.kind === "RANGE" || e.bias === "sideways";
+        const tag = isRange ? "tag-range" : (isCh ? (bull ? "tag-choch-bull" : "tag-choch-bear") : (bull ? "tag-bos-bull" : "tag-bos-bear"));
+        const title = isRange ? "RANGE" : e.type;
         const t = new Date(e.time * 1000);
         const ts = t.toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
-        return `<div class="pi structure-row ${isCh ? "choch-blink" : ""}">
-          <span class="tag ${tag}">${e.type}</span>
-          <span class="txt"><b>${bull ? "Up" : "Down"}</b> · level ${e.level.toFixed(2)} · ${ts}<br><span class="meta">${e.note}</span></span>
+        const lvl = e.level != null ? Number(e.level).toFixed(2) : "—";
+        return `<div class="pi structure-row ${isCh || isRange ? "choch-blink" : ""}">
+          <span class="tag ${tag}">${title}</span>
+          <span class="txt"><b>${isRange ? "Sideways" : (bull ? "Up" : "Down")}</b> · level ${lvl} · ${ts}<br><span class="meta">${e.note || ""}</span></span>
         </div>`;
       }).join("");
     }
@@ -262,7 +268,7 @@ function applyStructure(data, events){
 function startStructurePulse(){
   if (structurePulseTimer) return;
   structurePulseTimer = setInterval(() => {
-    if (!(structureLastEvents || []).some(e => e.type === "CHoCH")) return;
+    if (!(structureLastEvents || []).some(e => e.type === "CHoCH" || e.kind === "RANGE")) return;
     drawStructureBlocks();
   }, 100);
 }
