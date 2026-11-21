@@ -72,60 +72,28 @@ function detectBosChoch(data){
     const c = data[i];
     if (activeTrend === 1 && lastHigh && lastLow){
       if (c.close > lastHigh.price && i > lastHigh.i){
-        confirmed.push({
-          type: "BOS", bias: "bull", time: c.time, i,
-          level: lastHigh.price,
-          top: Math.max(c.high, lastHigh.price),
-          bottom: lastHigh.price,
-          note: "Close above prior high — uptrend may continue"
-        });
+        confirmed.push({ type: "BOS", bias: "bull", time: c.time, i, level: lastHigh.price, top: Math.max(c.high, lastHigh.price), bottom: lastHigh.price, note: "Close above prior high — uptrend may continue" });
         lastHigh = { i, time: c.time, price: c.high };
       }
       if (c.close < lastLow.price && i > lastLow.i){
-        confirmed.push({
-          type: "CHoCH", bias: "bear", time: c.time, i,
-          level: lastLow.price,
-          top: lastLow.price,
-          bottom: Math.min(c.low, lastLow.price),
-          note: "Close below higher low — trend may change"
-        });
+        confirmed.push({ type: "CHoCH", bias: "bear", time: c.time, i, level: lastLow.price, top: lastLow.price, bottom: Math.min(c.low, lastLow.price), note: "Close below higher low — trend may change" });
         activeTrend = -1;
       }
     } else if (activeTrend === -1 && lastHigh && lastLow){
       if (c.close < lastLow.price && i > lastLow.i){
-        confirmed.push({
-          type: "BOS", bias: "bear", time: c.time, i,
-          level: lastLow.price,
-          top: lastLow.price,
-          bottom: Math.min(c.low, lastLow.price),
-          note: "Close below prior low — downtrend may continue"
-        });
+        confirmed.push({ type: "BOS", bias: "bear", time: c.time, i, level: lastLow.price, top: lastLow.price, bottom: Math.min(c.low, lastLow.price), note: "Close below prior low — downtrend may continue" });
         lastLow = { i, time: c.time, price: c.low };
       }
       if (c.close > lastHigh.price && i > lastHigh.i){
-        confirmed.push({
-          type: "CHoCH", bias: "bull", time: c.time, i,
-          level: lastHigh.price,
-          top: Math.max(c.high, lastHigh.price),
-          bottom: lastHigh.price,
-          note: "Close above lower high — trend may change"
-        });
+        confirmed.push({ type: "CHoCH", bias: "bull", time: c.time, i, level: lastHigh.price, top: Math.max(c.high, lastHigh.price), bottom: lastHigh.price, note: "Close above lower high — trend may change" });
         activeTrend = 1;
       }
     } else if (activeTrend === 0 && lastHigh && lastLow){
       if (c.close > lastHigh.price && i > lastHigh.i){
-        confirmed.push({
-          type: "BOS", bias: "bull", time: c.time, i,
-          level: lastHigh.price, top: c.high, bottom: lastHigh.price,
-          note: "Close above prior high — up structure"
-        });
+        confirmed.push({ type: "BOS", bias: "bull", time: c.time, i, level: lastHigh.price, top: c.high, bottom: lastHigh.price, note: "Close above prior high — up structure" });
         activeTrend = 1;
       } else if (c.close < lastLow.price && i > lastLow.i){
-        confirmed.push({
-          type: "BOS", bias: "bear", time: c.time, i,
-          level: lastLow.price, top: lastLow.price, bottom: c.low,
-          note: "Close below prior low — down structure"
-        });
+        confirmed.push({ type: "BOS", bias: "bear", time: c.time, i, level: lastLow.price, top: lastLow.price, bottom: c.low, note: "Close below prior low — down structure" });
         activeTrend = -1;
       }
     }
@@ -197,20 +165,41 @@ function drawStructureBlocks(){
     const w = Math.max(4, right - left);
     const h = Math.max(3, botY - topY);
 
-    let a = isCh ? 0.28 : 0.16;
-    if (isCh) a = 0.22 + 0.10 * Math.sin(Date.now() / 450);
-
-    ctx.fillStyle = bull ? `rgba(31,138,91,${a})` : `rgba(200,64,58,${a})`;
+    // Trend color: green=up, red=down
+    const base = bull ? [31, 138, 91] : [200, 64, 58];
+    // BOS: solid highlighted block
+    // CHoCH: same trend color, always blinks
+    let a;
+    if (isCh) {
+      const t = (Date.now() % 700) / 700;
+      const wave = t < 0.5 ? t * 2 : (1 - t) * 2;
+      a = 0.12 + 0.32 * wave;
+    } else {
+      a = 0.28;
+    }
+    ctx.fillStyle = `rgba(${base[0]},${base[1]},${base[2]},${a})`;
     ctx.fillRect(left, topY, w, h);
 
-    ctx.strokeStyle = bull
-      ? (isCh ? "rgba(31,138,91,0.85)" : "rgba(31,138,91,0.45)")
-      : (isCh ? "rgba(200,64,58,0.85)" : "rgba(200,64,58,0.45)");
-    ctx.lineWidth = isCh ? 1.5 : 1;
+    let ba;
+    if (isCh) {
+      const t = (Date.now() % 700) / 700;
+      const wave = t < 0.5 ? t * 2 : (1 - t) * 2;
+      ba = 0.40 + 0.55 * wave;
+    } else {
+      ba = 0.92;
+    }
+    ctx.strokeStyle = `rgba(${base[0]},${base[1]},${base[2]},${ba})`;
+    ctx.lineWidth = 2;
     ctx.strokeRect(left + 0.5, topY + 0.5, w - 1, h - 1);
 
-    ctx.font = "10px system-ui,sans-serif";
-    ctx.fillStyle = bull ? "rgba(31,138,91,0.95)" : "rgba(200,64,58,0.95)";
+    if (isCh && a > 0.30) {
+      ctx.strokeStyle = `rgba(${base[0]},${base[1]},${base[2]},0.35)`;
+      ctx.lineWidth = 4;
+      ctx.strokeRect(left - 1, topY - 1, w + 2, h + 2);
+    }
+
+    ctx.font = "bold 10px system-ui,sans-serif";
+    ctx.fillStyle = `rgba(${base[0]},${base[1]},${base[2]},0.98)`;
     const label = e.type;
     const tw = ctx.measureText(label).width;
     if (w > tw + 8 && h > 12) ctx.fillText(label, left + 4, topY + 11);
@@ -223,8 +212,6 @@ function applyStructure(data, events){
   structureSeries.setData(data.map(c => ({
     time: c.time, open: c.open, high: c.high, low: c.low, close: c.close
   })));
-
-  // Blocks only — no marker clutter
   structureSeries.setMarkers([]);
 
   const recent = events.slice(-10);
@@ -239,7 +226,7 @@ function applyStructure(data, events){
       price: e.level,
       color: isCh
         ? (bull ? "rgba(31,138,91,0.55)" : "rgba(200,64,58,0.55)")
-        : (bull ? "rgba(31,138,91,0.35)" : "rgba(200,64,58,0.35)"),
+        : (bull ? "rgba(31,138,91,0.45)" : "rgba(200,64,58,0.45)"),
       lineWidth: 1,
       lineStyle: 2,
       axisLabelVisible: true,
@@ -275,9 +262,9 @@ function applyStructure(data, events){
 function startStructurePulse(){
   if (structurePulseTimer) return;
   structurePulseTimer = setInterval(() => {
-    if (!structureLastEvents.some(e => e.type === "CHoCH")) return;
+    if (!(structureLastEvents || []).some(e => e.type === "CHoCH")) return;
     drawStructureBlocks();
-  }, 400);
+  }, 100);
 }
 
 async function loadStructurePanel(){
