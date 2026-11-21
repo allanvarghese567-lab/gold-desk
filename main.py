@@ -1,5 +1,6 @@
-import asyncio, json, os, time
+import asyncio, json, os, sqlite3, time, uuid
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import httpx
 from dotenv import load_dotenv
@@ -22,7 +23,6 @@ SECRET = os.getenv("TV_WEBHOOK_SECRET", "")
 ENV = os.getenv("OANDA_ENV", "practice")
 REST = "https://api-fxpractice.oanda.com" if ENV == "practice" else "https://api-fxtrade.oanda.com"
 STREAM = "https://stream-fxpractice.oanda.com" if ENV == "practice" else "https://stream-fxtrade.oanda.com"
-# XAU_USD first on purpose — default for Gold Desk
 INSTRUMENTS = [
     "XAU_USD",
     "EUR_USD", "GBP_USD", "USD_JPY", "USD_CHF", "AUD_USD", "NZD_USD", "USD_CAD",
@@ -36,6 +36,72 @@ subscribers: set[asyncio.Queue] = set()
 signals: list[dict] = []
 news_cache = {"at": 0.0, "data": []}
 
+DATA_DIR = Path(os.getenv("DATA_DIR", "data"))
+DB_PATH = DATA_DIR / "golddesk.db"
+
+
+def _db() -> sqlite3.Connection:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def init_db() -> None:
+    with _db() as conn:
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS tv_webhook_log (
+                id TEXT PRIMARY KEY,
+                received_at INTEGER NOT NULL,
+                instrument TEXT,
+                side TEXT,
+                price REAL,
+                tf TEXT,
+                note TEXT,
+                raw_json TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_tv_webhook_received ON tv_webhook_log(received_at DESC);
+
+            CREATE TABLE IF NOT EXISTS journal (
+                id TEXT PRIMARY KEY,
+                opened_at INTEGER NOT NULL,
+                closed_at INTEGER,
+                instrument TEXT NOT NULL,
+                side TEXT NOT NULL,
+                style TEXT,
+                session TEXT,
+                granularity TEXT,
+                entry REAL,
+                stop REAL,
+                target REAL,
+                exit REAL,
+                result_r REAL,
+                status TEXT NOT NULL,
+                source TEXT NOT NULL,
+                confirm_score REAL,
+                notes TEXT,
+                tv_log_id TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_journal_opened ON journal(opened_at DESC);
+            """
+        )
+
+
+def classify_session_ist(ts: int | None = None) -> str:
+    ts = ts or int(time.time())
+    ist = time.gmtime(ts + 19800)
+    mins = ist.tm_hour * 60 + ist.tm_min
+    if 18 * 60 + 30 <= mins < 21 * 60:
+        return "overlap"
+    if mins >= 18 * 60 + 30 or mins < 1 * 60 + 30:
+        return "ny"
+    if 12 * 60 + 30 <= mins < 21 * 60:
+        return "london"
+    if 5 * 60 + 30 <= mins < 12 * 60 + 30:
+        return "asian"
+    return "off"
+
 
 def normalize_instrument(raw: str | None) -> str:
     if not raw:
@@ -48,6 +114,73 @@ def normalize_instrument(raw: str | None) -> str:
     return key
 
 
+def log_tv_webhook(body: dict) -> dict:
+    log_id = str(uuid.uuid4())
+    t = int(body.get("t") or time.time())
+    side_raw = str(body.get("side") or body.get("action") or "").strip().lower()
+    side = None
+    if side_raw in ("buy", "long"):
+        side = "long"
+    elif side_raw in ("sell", "short"):
+        side = "short"
+
+    instrument = None
+    for key in ("instrument", "symbol", "ticker"):
+        if body.get(key):
+            try:
+                instrument = normalize_instrument(str(body[key]))
+            except HTTPException:
+                instrument = str(body[key]).upper().replace("/", "_")
+            break
+    if not instrument:
+        instrument = INSTRUMENT
+
+    price = None
+    for key in ("price", "close", "entry"):
+        if body.get(key) is not None:
+            try:
+                price = float(body[key])
+            except (TypeError, ValueError):
+                price = None
+            break
+
+    tf = str(body.get("tf") or body.get("interval") or body.get("timeframe") or "") or None
+    note = str(body.get("note") or body.get("message") or body.get("comment") or "") or None
+    session = classify_session_ist(t)
+
+    with _db() as conn:
+        conn.execute(
+            """
+            INSERT INTO tv_webhook_log (id, received_at, instrument, side, price, tf, note, raw_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (log_id, t, instrument, side, price, tf, note, json.dumps(body, default=str)),
+        )
+        journal_id = None
+        if side and price is not None:
+            journal_id = str(uuid.uuid4())
+            conn.execute(
+                """
+                INSERT INTO journal (
+                    id, opened_at, closed_at, instrument, side, style, session, granularity,
+                    entry, stop, target, exit, result_r, status, source, confirm_score, notes, tv_log_id
+                ) VALUES (?, ?, NULL, ?, ?, NULL, ?, ?, ?, NULL, NULL, NULL, NULL, 'open', 'tv', NULL, ?, ?)
+                """,
+                (journal_id, t, instrument, side, session, tf, price, note, log_id),
+            )
+        conn.commit()
+
+    return {
+        "log_id": log_id,
+        "journal_id": journal_id,
+        "instrument": instrument,
+        "side": side,
+        "price": price,
+        "session": session,
+        "tf": tf,
+    }
+
+
 def publish(kind: str, payload: dict):
     msg = f"event: {kind}\ndata: {json.dumps(payload)}\n\n"
     for q in list(subscribers):
@@ -57,7 +190,6 @@ def publish(kind: str, payload: dict):
 
 
 async def price_stream():
-    """Stream all desk instruments; each tick includes instrument code."""
     url = f"{STREAM}/v3/accounts/{ACCOUNT}/pricing/stream"
     joined = ",".join(INSTRUMENTS)
     while True:
@@ -89,6 +221,7 @@ async def price_stream():
 
 @asynccontextmanager
 async def lifespan(app):
+    init_db()
     task = asyncio.create_task(price_stream()) if TOKEN else None
     if not TOKEN:
         print("OANDA_TOKEN missing: copy .env.example to .env and fill it in.")
@@ -101,7 +234,6 @@ app = FastAPI(lifespan=lifespan)
 
 
 async def fetch_oanda_bars(granularity: str = "M15", count: int = 300, instrument: str | None = None):
-    """OHLCV bars for chart + confirmation engine."""
     ins = normalize_instrument(instrument)
     async with httpx.AsyncClient(timeout=15) as c:
         r = await c.get(
@@ -128,13 +260,9 @@ async def fetch_oanda_bars(granularity: str = "M15", count: int = 300, instrumen
 
 @app.get("/api/instruments")
 async def list_instruments():
-    """XAU_USD first, then major FX / silver."""
     return {
         "default": INSTRUMENT,
-        "instruments": [
-            {"id": i, "label": i.replace("_", "/")}
-            for i in INSTRUMENTS
-        ],
+        "instruments": [{"id": i, "label": i.replace("_", "/")} for i in INSTRUMENTS],
     }
 
 
@@ -151,7 +279,6 @@ async def candles(granularity: str = "M15", count: int = 500, instrument: str | 
 
 @app.get("/api/news")
 async def news():
-    """Forex Factory weekly feed, cached 15 min. Gold reacts to USD, so USD events only."""
     if time.time() - news_cache["at"] > 900:
         try:
             async with httpx.AsyncClient(timeout=15) as c:
@@ -166,20 +293,71 @@ async def news():
 
 @app.post("/webhook/tv")
 async def tv_webhook(req: Request):
+    """TradingView alert → memory + SQLite log + optional open journal draft."""
     body = await req.json()
     if SECRET and body.get("secret") != SECRET:
         raise HTTPException(401, "bad secret")
+    body = dict(body)
     body.pop("secret", None)
     body["t"] = int(time.time())
+    logged = log_tv_webhook(body)
+    body["log_id"] = logged["log_id"]
+    if logged.get("journal_id"):
+        body["journal_id"] = logged["journal_id"]
     signals.insert(0, body)
     del signals[50:]
     publish("signal", body)
-    return {"ok": True}
+    return {"ok": True, **logged}
 
 
 @app.get("/api/signals")
-async def get_signals():
-    return signals
+async def get_signals(limit: int = Query(50, ge=1, le=200)):
+    if signals:
+        return signals[:limit]
+    with _db() as conn:
+        rows = conn.execute(
+            "SELECT raw_json FROM tv_webhook_log ORDER BY received_at DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+    out = []
+    for r in rows:
+        try:
+            out.append(json.loads(r["raw_json"]))
+        except Exception:
+            continue
+    return out
+
+
+@app.get("/api/webhook/logs")
+async def webhook_logs(limit: int = Query(50, ge=1, le=200)):
+    with _db() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, received_at, instrument, side, price, tf, note
+            FROM tv_webhook_log
+            ORDER BY received_at DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+@app.get("/api/journal")
+async def journal_list(
+    status: str | None = Query(None),
+    limit: int = Query(50, ge=1, le=200),
+):
+    q = "SELECT * FROM journal"
+    args: list = []
+    if status:
+        q += " WHERE status = ?"
+        args.append(status)
+    q += " ORDER BY opened_at DESC LIMIT ?"
+    args.append(limit)
+    with _db() as conn:
+        rows = conn.execute(q, args).fetchall()
+    return [dict(r) for r in rows]
 
 
 @app.get("/api/confirm")
@@ -191,7 +369,6 @@ async def confirm(
     rr: float = Query(2.0, ge=1.0, le=10.0),
     instrument: str | None = None,
 ):
-    """Run the confirmation engine on live OANDA bars for the selected instrument."""
     if granularity not in {"M5", "M15", "H1", "H4", "D"}:
         raise HTTPException(400, "granularity must be M5, M15, H1, H4, or D")
     if not TOKEN:
