@@ -181,6 +181,97 @@ def log_tv_webhook(body: dict) -> dict:
     }
 
 
+def compute_result_r(side: str, entry: float, stop: float, exit_px: float) -> float:
+    risk = abs(float(entry) - float(stop))
+    if risk <= 0:
+        raise ValueError("stop must differ from entry")
+    side = side.lower()
+    if side == "long":
+        return (float(exit_px) - float(entry)) / risk
+    if side == "short":
+        return (float(entry) - float(exit_px)) / risk
+    raise ValueError("side must be long or short")
+
+
+def journal_stats(rows: list) -> dict:
+    """E = (WR * avg_win_R) - ((1-WR) * avg_loss_R)"""
+    closed = [r for r in rows if r["status"] in ("win", "loss", "be") and r["result_r"] is not None]
+    n = len(closed)
+    if n == 0:
+        return {
+            "n": 0, "wins": 0, "losses": 0, "be": 0,
+            "win_rate": None, "avg_win_r": None, "avg_loss_r": None,
+            "avg_r": None, "expectancy_r": None, "sum_r": None,
+            "by_session": {}, "by_style": {}, "by_instrument": {},
+        }
+
+    win_rs = [float(r["result_r"]) for r in closed if r["status"] == "win"]
+    loss_rs = [abs(float(r["result_r"])) for r in closed if r["status"] == "loss"]
+    be_n = sum(1 for r in closed if r["status"] == "be")
+    if not win_rs and not loss_rs:
+        win_rs = [float(r["result_r"]) for r in closed if float(r["result_r"]) > 1e-9]
+        loss_rs = [abs(float(r["result_r"])) for r in closed if float(r["result_r"]) < -1e-9]
+        be_n = sum(1 for r in closed if abs(float(r["result_r"])) <= 1e-9)
+
+    decided = len(win_rs) + len(loss_rs)
+    wr = (len(win_rs) / decided) if decided else None
+    avg_win = sum(win_rs) / len(win_rs) if win_rs else None
+    avg_loss = sum(loss_rs) / len(loss_rs) if loss_rs else None
+    all_r = [float(r["result_r"]) for r in closed]
+    avg_r = sum(all_r) / n
+    sum_r = sum(all_r)
+
+    if wr is not None and avg_win is not None and avg_loss is not None:
+        expectancy = wr * avg_win - (1 - wr) * avg_loss
+    elif wr is not None and avg_win is not None and not loss_rs:
+        expectancy = wr * avg_win
+    elif decided and avg_loss is not None and not win_rs:
+        expectancy = -avg_loss
+    else:
+        expectancy = avg_r
+
+    def simple_bucket(key: str) -> dict:
+        groups: dict[str, list] = {}
+        for r in closed:
+            groups.setdefault(r.get(key) or "unknown", []).append(r)
+        out = {}
+        for k, items in groups.items():
+            rs = [float(x["result_r"]) for x in items]
+            w = [x for x in rs if x > 1e-9]
+            l = [abs(x) for x in rs if x < -1e-9]
+            d = len(w) + len(l)
+            wr_b = len(w) / d if d else None
+            aw = sum(w) / len(w) if w else None
+            al = sum(l) / len(l) if l else None
+            if wr_b is not None and aw is not None and al is not None:
+                e = wr_b * aw - (1 - wr_b) * al
+            else:
+                e = sum(rs) / len(rs) if rs else None
+            out[k] = {
+                "n": len(items),
+                "win_rate": round(wr_b, 4) if wr_b is not None else None,
+                "expectancy_r": round(e, 4) if e is not None else None,
+                "avg_r": round(sum(rs) / len(rs), 4) if rs else None,
+            }
+        return out
+
+    return {
+        "n": n,
+        "wins": len(win_rs),
+        "losses": len(loss_rs),
+        "be": be_n,
+        "win_rate": round(wr, 4) if wr is not None else None,
+        "avg_win_r": round(avg_win, 4) if avg_win is not None else None,
+        "avg_loss_r": round(avg_loss, 4) if avg_loss is not None else None,
+        "avg_r": round(avg_r, 4),
+        "expectancy_r": round(expectancy, 4) if expectancy is not None else None,
+        "sum_r": round(sum_r, 4),
+        "by_session": simple_bucket("session"),
+        "by_style": simple_bucket("style"),
+        "by_instrument": simple_bucket("instrument"),
+    }
+
+
 def publish(kind: str, payload: dict):
     msg = f"event: {kind}\ndata: {json.dumps(payload)}\n\n"
     for q in list(subscribers):
@@ -293,7 +384,6 @@ async def news():
 
 @app.post("/webhook/tv")
 async def tv_webhook(req: Request):
-    """TradingView alert → memory + SQLite log + optional open journal draft."""
     body = await req.json()
     if SECRET and body.get("secret") != SECRET:
         raise HTTPException(401, "bad secret")
@@ -334,9 +424,7 @@ async def webhook_logs(limit: int = Query(50, ge=1, le=200)):
         rows = conn.execute(
             """
             SELECT id, received_at, instrument, side, price, tf, note
-            FROM tv_webhook_log
-            ORDER BY received_at DESC
-            LIMIT ?
+            FROM tv_webhook_log ORDER BY received_at DESC LIMIT ?
             """,
             (limit,),
         ).fetchall()
@@ -358,6 +446,134 @@ async def journal_list(
     with _db() as conn:
         rows = conn.execute(q, args).fetchall()
     return [dict(r) for r in rows]
+
+
+@app.post("/api/journal")
+async def journal_open(req: Request):
+    body = await req.json()
+    side = str(body.get("side") or "").strip().lower()
+    if side in ("buy", "long"):
+        side = "long"
+    elif side in ("sell", "short"):
+        side = "short"
+    else:
+        raise HTTPException(400, "side must be long/short")
+    try:
+        entry = float(body["entry"])
+    except Exception:
+        raise HTTPException(400, "entry required")
+    stop = body.get("stop")
+    target = body.get("target")
+    try:
+        stop = float(stop) if stop is not None else None
+        target = float(target) if target is not None else None
+    except (TypeError, ValueError):
+        raise HTTPException(400, "stop/target must be numbers")
+    ins = normalize_instrument(body.get("instrument"))
+    t = int(time.time())
+    jid = str(uuid.uuid4())
+    with _db() as conn:
+        conn.execute(
+            """
+            INSERT INTO journal (
+                id, opened_at, closed_at, instrument, side, style, session, granularity,
+                entry, stop, target, exit, result_r, status, source, confirm_score, notes, tv_log_id
+            ) VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, 'open', 'manual', ?, ?, NULL)
+            """,
+            (
+                jid, t, ins, side,
+                body.get("style"),
+                classify_session_ist(t),
+                body.get("granularity") or body.get("tf"),
+                entry, stop, target,
+                body.get("confirm_score"),
+                body.get("notes"),
+            ),
+        )
+        conn.commit()
+    return {"ok": True, "id": jid, "session": classify_session_ist(t)}
+
+
+@app.patch("/api/journal/{trade_id}/close")
+async def journal_close(trade_id: str, req: Request):
+    body = await req.json()
+    try:
+        exit_px = float(body["exit"])
+    except Exception:
+        raise HTTPException(400, "exit required")
+    with _db() as conn:
+        row = conn.execute("SELECT * FROM journal WHERE id = ?", (trade_id,)).fetchone()
+        if not row:
+            raise HTTPException(404, "trade not found")
+        if row["status"] != "open":
+            raise HTTPException(400, "trade already closed")
+        entry = float(row["entry"])
+        stop = row["stop"]
+        if body.get("stop") is not None:
+            stop = float(body["stop"])
+        if stop is None:
+            raise HTTPException(400, "stop required to compute R (set on open or pass on close)")
+        try:
+            result_r = compute_result_r(row["side"], entry, float(stop), exit_px)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        if abs(result_r) <= 1e-9:
+            status = "be"
+        elif result_r > 0:
+            status = "win"
+        else:
+            status = "loss"
+        closed_at = int(time.time())
+        conn.execute(
+            """
+            UPDATE journal
+            SET closed_at = ?, exit = ?, stop = ?, result_r = ?, status = ?
+            WHERE id = ?
+            """,
+            (closed_at, exit_px, float(stop), result_r, status, trade_id),
+        )
+        conn.commit()
+        updated = conn.execute("SELECT * FROM journal WHERE id = ?", (trade_id,)).fetchone()
+    return {"ok": True, "trade": dict(updated), "result_r": round(result_r, 4), "status": status}
+
+
+@app.get("/api/journal/stats")
+async def journal_stats_api(
+    instrument: str | None = Query(None),
+    style: str | None = Query(None),
+    session: str | None = Query(None),
+    source: str | None = Query(None),
+    limit: int = Query(500, ge=1, le=5000),
+):
+    """Live expectancy from closed journal trades."""
+    q = "SELECT * FROM journal WHERE status IN ('win','loss','be')"
+    args: list = []
+    if instrument:
+        q += " AND instrument = ?"
+        args.append(normalize_instrument(instrument))
+    if style:
+        q += " AND style = ?"
+        args.append(style)
+    if session:
+        q += " AND session = ?"
+        args.append(session)
+    if source:
+        q += " AND source = ?"
+        args.append(source)
+    q += " ORDER BY closed_at DESC LIMIT ?"
+    args.append(limit)
+    with _db() as conn:
+        rows = [dict(r) for r in conn.execute(q, args).fetchall()]
+    stats = journal_stats(rows)
+    stats["formula"] = "(win_rate * avg_win_r) - ((1 - win_rate) * avg_loss_r)"
+    stats["filters"] = {
+        "instrument": instrument,
+        "style": style,
+        "session": session,
+        "source": source,
+        "limit": limit,
+    }
+    return stats
 
 
 @app.get("/api/confirm")
