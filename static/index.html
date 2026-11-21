@@ -2,17 +2,68 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Gold Desk</title>
-<style>body{font-family:system-ui;background:#14110b;color:#f1e8d2;display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0}
-.box{text-align:center;padding:24px}a{color:#e0b04a}</style>
+<style>
+:root{--bg:#14110b;--panel:#1d1910;--ink:#f1e8d2;--mute:#a1957a;--line:#322b1b;--accent:#e0b04a;--up:#1f8a5b;--down:#c8403a;color-scheme:dark}
+*{box-sizing:border-box}html,body{margin:0}body{background:var(--bg);color:var(--ink);font:15px/1.45 system-ui,sans-serif}
+.wrap{max-width:1200px;margin:0 auto;padding:12px}
+header{display:flex;flex-wrap:wrap;gap:10px;align-items:baseline;margin-bottom:12px}
+h1{margin:0;font-size:18px}#price{font-size:28px;font-weight:600;margin-left:auto}#price.up{color:var(--up)}#price.down{color:var(--down)}#spread{color:var(--mute);font-size:13px}
+.tfs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px}
+button,select{font:inherit;color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:6px 12px;min-height:38px;cursor:pointer}
+button[aria-pressed="true"]{background:var(--accent);border-color:var(--accent);color:#14110b}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden;margin-bottom:12px}
+#chart{height:55vh;min-height:320px}
+.confirm-head{display:flex;flex-wrap:wrap;gap:6px;padding:10px 14px;border-bottom:1px solid var(--line)}
+.confirm-meta{padding:10px 14px;font-size:13px;color:var(--mute)}
+</style>
 </head>
 <body>
-<div class="box">
-  <h1>Gold Desk</h1>
-  <p>Restoring UI after deploy… this page reloads automatically.</p>
-  <p><a href="/">Retry now</a></p>
+<div class="wrap">
+  <header>
+    <h1>Gold Desk</h1>
+    <select id="instrument"><option value="XAU_USD">XAU/USD</option></select>
+    <span id="spread"></span><span id="price">--</span>
+  </header>
+  <div class="tfs" id="tfs">
+    <button data-g="M1" data-s="60">1m</button>
+    <button data-g="M5" data-s="300">5m</button>
+    <button data-g="M15" data-s="900" aria-pressed="true">15m</button>
+    <button data-g="H1" data-s="3600">1h</button>
+    <button data-g="H4" data-s="14400">4h</button>
+    <button data-g="D" data-s="86400">1D</button>
+  </div>
+  <div class="panel"><div id="chart"></div></div>
+  <div class="panel">
+    <div class="confirm-head">
+      <select id="cfSide"><option value="long">Long</option><option value="short">Short</option></select>
+      <select id="cfGran"><option value="M15">15m</option><option value="M5">5m</option><option value="H1">1h</option></select>
+      <button type="button" id="cfRun">Run confirm</button>
+    </div>
+    <div class="confirm-meta" id="cfMeta">Press Run. Pattern / BOS panels return in a follow-up restore.</div>
+  </div>
 </div>
-<script>setTimeout(function(){ location.reload(); }, 2000);</script>
+<script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+<script>
+const $=id=>document.getElementById(id);
+let gran="M15", step=900, last=null, currentInstrument="XAU_USD", prev=null;
+function instrumentLabel(id){return (id||"").replace("_","/")}
+function priceDecimals(id){if((id||"").startsWith("XAU")||(id||"").startsWith("XAG"))return 2;if((id||"").endsWith("JPY"))return 3;return 5}
+const chart=LightweightCharts.createChart($("chart"),{autoSize:true,layout:{background:{color:"transparent"},textColor:"#a1957a"},grid:{vertLines:{color:"#26200f"},horzLines:{color:"#26200f"}},timeScale:{timeVisible:true,secondsVisible:false},rightPriceScale:{borderVisible:false}});
+const series=chart.addCandlestickSeries({upColor:"#1f8a5b",downColor:"#c8403a",borderVisible:false,wickUpColor:"#1f8a5b",wickDownColor:"#c8403a"});
+const snap=t=>Math.floor(t/step)*step;
+async function loadInstruments(){try{const r=await fetch("/api/instruments");const d=await r.json();const sel=$("instrument");if(!sel||!d.instruments)return;sel.innerHTML=d.instruments.map(i=>`<option value="${i.id}">${i.label}</option>`).join("");currentInstrument=d.default||d.instruments[0].id;sel.value=currentInstrument}catch(e){}}
+$("instrument").onchange=()=>{currentInstrument=$("instrument").value;last=null;prev=null;$("price").textContent="--";loadCandles()};
+async function loadCandles(){const r=await fetch(`/api/candles?granularity=${gran}&count=500&instrument=${encodeURIComponent(currentInstrument)}`);if(!r.ok){$("price").textContent="check OANDA env";return}const data=await r.json();series.setData(data);last=data[data.length-1];if(last){const dp=priceDecimals(currentInstrument);$("price").textContent=(+last.close).toFixed(dp);$("spread").textContent=instrumentLabel(currentInstrument)}}
+function applyTick(d){if(d.instrument&&d.instrument!==currentInstrument)return;const t=snap(d.t),dp=priceDecimals(currentInstrument);$("price").textContent=d.mid.toFixed(dp);$("price").className=prev===null?"":(d.mid>prev?"up":"down");prev=d.mid;$("spread").textContent=instrumentLabel(currentInstrument)+" · live";if(last&&last.time===t){last.high=Math.max(last.high,d.mid);last.low=Math.min(last.low,d.mid);last.close=d.mid}else last={time:t,open:d.mid,high:d.mid,low:d.mid,close:d.mid};if(last)series.update(last)}
+let es=null,lastTickAt=0;
+function connectStream(){try{if(es)es.close()}catch(e){}es=new EventSource("/stream");es.addEventListener("tick",ev=>{try{const d=JSON.parse(ev.data);lastTickAt=Date.now();applyTick(d)}catch(e){}});es.onerror=()=>setTimeout(connectStream,3000)}
+connectStream();
+setInterval(async()=>{if(Date.now()-lastTickAt<4000)return;try{let r=await fetch("/api/pricing?instrument="+encodeURIComponent(currentInstrument));if(r.ok){applyTick(await r.json());return}r=await fetch("/api/candles?granularity=M1&count=1&instrument="+encodeURIComponent(currentInstrument));if(!r.ok)return;const arr=await r.json();if(!arr.length)return;const c=arr[arr.length-1];applyTick({instrument:currentInstrument,mid:c.close,bid:c.close,ask:c.close,t:c.time})}catch(e){}},5000);
+$("tfs").onclick=e=>{const b=e.target.closest("button");if(!b)return;document.querySelectorAll("#tfs button").forEach(x=>x.setAttribute("aria-pressed",x===b?"true":"false"));gran=b.dataset.g;step=+b.dataset.s;loadCandles()};
+$("cfRun").onclick=async()=>{const side=$("cfSide").value,cgran=$("cfGran").value;$("cfMeta").textContent="Loading…";try{const r=await fetch(`/api/confirm?side=${side}&granularity=${cgran}&instrument=${encodeURIComponent(currentInstrument)}`);const d=await r.json();if(!r.ok)throw new Error(d.detail||r.statusText);$("cfMeta").textContent=`${d.decision} · score ${d.score}/${d.score_max} · entry ${d.entry} · SL ${d.stop} · TP ${d.target}`}catch(e){$("cfMeta").textContent="Failed: "+(e.message||e)}};
+loadInstruments().then(loadCandles);
+</script>
 </body>
 </html>
