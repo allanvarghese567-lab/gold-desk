@@ -1,5 +1,4 @@
-/* CRT + TBS — Candle Range Theory + Turtle Body Soup
-   Transparent blocks: CRT range (bias color) · TBS confirmation (blink) */
+/* CRT + TBS + RANGE warning (sideways) */
 let crtChart, crtSeries, crtGran = "H1";
 let crtLastEvents = [], crtLastData = [], crtPulseTimer = null, crtLines = [];
 
@@ -99,6 +98,30 @@ function detectTbsAfterCrt(data, crtEvents){
   return tbs.slice(-12);
 }
 
+function detectRangeCrt(data){
+  if (!data || data.length < 40) return null;
+  const slice = data.slice(-40);
+  const hi = Math.max(...slice.map(c => c.high));
+  const lo = Math.min(...slice.map(c => c.low));
+  if (hi <= lo) return null;
+  const avgBody = slice.reduce((s, c) => s + Math.abs(c.close - c.open), 0) / slice.length;
+  const width = hi - lo;
+  if (avgBody <= 0) return null;
+  const nearHi = slice.filter(c => c.high >= hi - width * 0.15).length;
+  const nearLo = slice.filter(c => c.low <= lo + width * 0.15).length;
+  const mid = (hi + lo) / 2;
+  const crosses = slice.filter(c => (c.low < mid && c.high > mid)).length;
+  if (nearHi >= 3 && nearLo >= 3 && crosses >= 8 && width < avgBody * 25){
+    return {
+      kind: "RANGE", bias: "sideways",
+      time: slice[0].time, c1Time: slice[0].time, endTime: slice[slice.length - 1].time,
+      top: hi, bottom: lo, high: hi, low: lo, level: mid,
+      note: "Sideways / range — no clear trend · warning"
+    };
+  }
+  return null;
+}
+
 function ensureCrtOverlay(){
   const host = $("chartCrt");
   if (!host) return null;
@@ -131,8 +154,8 @@ function drawCrtBlocks(){
   events.forEach(e => {
     const bull = e.bias === "bull";
     const isTbs = e.kind === "TBS";
-    const base = bull ? [31, 138, 91] : [200, 64, 58];
-    const fill = isTbs ? [224, 176, 74] : base;
+    const isRange = e.kind === "RANGE" || e.bias === "sideways";
+    const fill = isRange ? [232, 185, 35] : (isTbs ? [224, 176, 74] : (bull ? [31, 138, 91] : [200, 64, 58]));
     let hi = Math.max(e.top != null ? e.top : e.high, e.bottom != null ? e.bottom : e.low);
     let lo = Math.min(e.top != null ? e.top : e.high, e.bottom != null ? e.bottom : e.low);
     if (hi - lo < 1e-6){
@@ -142,7 +165,7 @@ function drawCrtBlocks(){
     }
     const t0 = e.c1Time != null ? e.c1Time : e.time;
     const x1 = ts.timeToCoordinate(t0);
-    const x2 = ts.timeToCoordinate(isTbs ? e.time : lastTime);
+    const x2 = ts.timeToCoordinate(isTbs ? e.time : (e.endTime != null ? e.endTime : lastTime));
     const y1 = crtSeries.priceToCoordinate(hi);
     const y2 = crtSeries.priceToCoordinate(lo);
     if (x1 == null || y1 == null || y2 == null) return;
@@ -153,22 +176,22 @@ function drawCrtBlocks(){
     const w = Math.max(4, right - left);
     const h = Math.max(3, botY - topY);
     let a;
-    if (isTbs) {
+    if (isRange) a = 0.14 + 0.08 * Math.sin(Date.now() / 600);
+    else if (isTbs) {
       const t = (Date.now() % 700) / 700;
       const wave = t < 0.5 ? t * 2 : (1 - t) * 2;
       a = 0.14 + 0.30 * wave;
-    } else {
-      a = 0.18;
-    }
+    } else a = 0.18;
     ctx.fillStyle = `rgba(${fill[0]},${fill[1]},${fill[2]},${a})`;
     ctx.fillRect(left, topY, w, h);
-    let ba = isTbs ? (0.45 + 0.45 * ((Date.now() % 700) < 350 ? 1 : 0.35)) : 0.55;
+    let ba = isTbs || isRange ? (0.45 + 0.35 * Math.abs(Math.sin(Date.now() / 500))) : 0.55;
     ctx.strokeStyle = `rgba(${fill[0]},${fill[1]},${fill[2]},${ba})`;
-    ctx.lineWidth = isTbs ? 2 : 1.5;
+    ctx.lineWidth = isTbs || isRange ? 2 : 1.5;
     ctx.strokeRect(left + 0.5, topY + 0.5, w - 1, h - 1);
     ctx.font = "bold 10px system-ui,sans-serif";
     ctx.fillStyle = `rgba(${fill[0]},${fill[1]},${fill[2]},0.95)`;
-    if (w > 28 && h > 12) ctx.fillText(e.kind, left + 4, topY + 11);
+    const label = isRange ? "RANGE" : e.kind;
+    if (w > 28 && h > 12) ctx.fillText(label, left + 4, topY + 11);
   });
 }
 
@@ -178,7 +201,8 @@ function applyCrt(data, events){
   crtSeries.setData(data.map(c => ({ time: c.time, open: c.open, high: c.high, low: c.low, close: c.close })));
   crtSeries.setMarkers([]);
   const recent = events.slice(-14);
-  crtLastEvents = recent;
+  const rangeCrt = detectRangeCrt(data);
+  crtLastEvents = rangeCrt ? [...recent, rangeCrt] : recent;
   crtLastData = data;
   const lastCrt = [...recent].reverse().find(e => e.kind === "CRT");
   if (lastCrt){
@@ -196,18 +220,20 @@ function applyCrt(data, events){
   setTimeout(drawCrtBlocks, 200);
   const list = $("listCrt");
   if (list){
-    if (!events.length){
+    const all = crtLastEvents;
+    if (!all.length){
       list.innerHTML = '<div class="empty">No CRT yet. Need C1 range + C2 sweep of <b>one</b> side and close back inside.</div>';
     } else {
-      list.innerHTML = events.slice().reverse().map(e => {
+      list.innerHTML = all.slice().reverse().map(e => {
         const bull = e.bias === "bull";
         const isTbs = e.kind === "TBS";
-        const tag = isTbs ? "tag-tbs" : (bull ? "tag-bos-bull" : "tag-bos-bear");
+        const isRange = e.kind === "RANGE" || e.bias === "sideways";
+        const tag = isRange ? "tag-range" : (isTbs ? "tag-tbs" : (bull ? "tag-bos-bull" : "tag-bos-bear"));
         const t = new Date(e.time * 1000);
         const ts = t.toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
-        return `<div class="pi structure-row ${isTbs ? "choch-blink" : ""}">
-          <span class="tag ${tag}">${e.kind}</span>
-          <span class="txt"><b>${bull ? "Up" : "Down"}</b> · ${ts}<br><span class="meta">${e.note}</span></span>
+        return `<div class="pi structure-row ${isTbs || isRange ? "choch-blink" : ""}">
+          <span class="tag ${tag}">${isRange ? "RANGE" : e.kind}</span>
+          <span class="txt"><b>${isRange ? "Sideways" : (bull ? "Up" : "Down")}</b> · ${ts}<br><span class="meta">${e.note || ""}</span></span>
         </div>`;
       }).join("");
     }
@@ -217,7 +243,7 @@ function applyCrt(data, events){
 function startCrtPulse(){
   if (crtPulseTimer) return;
   crtPulseTimer = setInterval(() => {
-    if (!(crtLastEvents || []).some(e => e.kind === "TBS")) return;
+    if (!(crtLastEvents || []).some(e => e.kind === "TBS" || e.kind === "RANGE")) return;
     drawCrtBlocks();
   }, 100);
 }
