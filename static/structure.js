@@ -1,7 +1,10 @@
-/* BOS / CHoCH structure chart — candle close confirms (not wick alone) */
+/* BOS / CHoCH — semi-transparent zone blocks; candle close confirms */
 let structureChart, structureSeries, structureGran = "H1";
 let structureLines = [];
 let structureData = [];
+let structureLastEvents = [];
+let structureLastData = [];
+let structurePulseTimer = null;
 
 function initStructureChart(){
   if (structureChart) return;
@@ -19,6 +22,8 @@ function initStructureChart(){
     upColor: "#1f8a5b", downColor: "#c8403a", borderVisible: false,
     wickUpColor: "#1f8a5b", wickDownColor: "#c8403a"
   });
+  structureChart.timeScale().subscribeVisibleTimeRangeChange(() => drawStructureBlocks());
+  window.addEventListener("resize", () => drawStructureBlocks());
   document.querySelectorAll(".structure-tfs").forEach(group => {
     group.addEventListener("click", e => {
       const b = e.target.closest("button[data-g]");
@@ -33,21 +38,6 @@ function initStructureChart(){
 function clearStructureLines(){
   structureLines.forEach(pl => { try { structureSeries.removePriceLine(pl); } catch(e){} });
   structureLines = [];
-}
-
-function findSwings(data, left){
-  left = left || 3;
-  const highs = [], lows = [];
-  for (let i = left; i < data.length - left; i++){
-    let isH = true, isL = true;
-    for (let k = 1; k <= left; k++){
-      if (data[i].high < data[i - k].high || data[i].high < data[i + k].high) isH = false;
-      if (data[i].low > data[i - k].low || data[i].low > data[i + k].low) isL = false;
-    }
-    if (isH) highs.push({ i, time: data[i].time, price: data[i].high });
-    if (isL) lows.push({ i, time: data[i].time, price: data[i].low });
-  }
-  return { highs, lows };
 }
 
 function detectBosChoch(data){
@@ -72,15 +62,11 @@ function detectBosChoch(data){
       if (s.type === "H"){
         prevHigh = lastHigh;
         lastHigh = s;
-        if (prevHigh && lastHigh.price > prevHigh.price && lastLow && prevLow && lastLow.price > prevLow.price){
-          activeTrend = 1;
-        }
+        if (prevHigh && lastHigh.price > prevHigh.price && lastLow && prevLow && lastLow.price > prevLow.price) activeTrend = 1;
       } else {
         prevLow = lastLow;
         lastLow = s;
-        if (prevLow && lastLow.price < prevLow.price && lastHigh && prevHigh && lastHigh.price < prevHigh.price){
-          activeTrend = -1;
-        }
+        if (prevLow && lastLow.price < prevLow.price && lastHigh && prevHigh && lastHigh.price < prevHigh.price) activeTrend = -1;
       }
     }
     const c = data[i];
@@ -153,6 +139,84 @@ function detectBosChoch(data){
   return out.slice(-20);
 }
 
+function ensureStructureOverlay(){
+  const host = $("chartStructure");
+  if (!host) return null;
+  host.style.position = host.style.position || "relative";
+  let cv = host.querySelector("canvas.structure-overlay");
+  if (!cv){
+    cv = document.createElement("canvas");
+    cv.className = "structure-overlay";
+    cv.style.cssText = "position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:5;";
+    host.appendChild(cv);
+  }
+  return cv;
+}
+
+function drawStructureBlocks(){
+  const cv = ensureStructureOverlay();
+  if (!cv || !structureChart || !structureSeries) return;
+  const rect = cv.parentElement.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  cv.width = Math.max(1, Math.floor(rect.width * dpr));
+  cv.height = Math.max(1, Math.floor(rect.height * dpr));
+  const ctx = cv.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, rect.width, rect.height);
+
+  const events = structureLastEvents || [];
+  const data = structureLastData || [];
+  if (!events.length || !data.length) return;
+
+  const ts = structureChart.timeScale();
+  const lastTime = data[data.length - 1].time;
+
+  events.forEach(e => {
+    const bull = e.bias === "bull";
+    const isCh = e.type === "CHoCH";
+    const top = e.top != null ? e.top : e.level;
+    const bottom = e.bottom != null ? e.bottom : e.level;
+    let hi = Math.max(top, bottom);
+    let lo = Math.min(top, bottom);
+    if (hi - lo < 1e-6){
+      const pad = Math.max(Math.abs(e.level) * 0.0004, 0.5);
+      hi = e.level + pad;
+      lo = e.level - pad;
+    }
+
+    const x1 = ts.timeToCoordinate(e.time);
+    const x2 = ts.timeToCoordinate(lastTime);
+    const y1 = structureSeries.priceToCoordinate(hi);
+    const y2 = structureSeries.priceToCoordinate(lo);
+    if (x1 == null || y1 == null || y2 == null) return;
+
+    const left = Math.min(x1, x2 != null ? x2 : x1 + 40);
+    const right = Math.max(x1, x2 != null ? x2 : x1 + 40);
+    const topY = Math.min(y1, y2);
+    const botY = Math.max(y1, y2);
+    const w = Math.max(4, right - left);
+    const h = Math.max(3, botY - topY);
+
+    let a = isCh ? 0.28 : 0.16;
+    if (isCh) a = 0.22 + 0.10 * Math.sin(Date.now() / 450);
+
+    ctx.fillStyle = bull ? `rgba(31,138,91,${a})` : `rgba(200,64,58,${a})`;
+    ctx.fillRect(left, topY, w, h);
+
+    ctx.strokeStyle = bull
+      ? (isCh ? "rgba(31,138,91,0.85)" : "rgba(31,138,91,0.45)")
+      : (isCh ? "rgba(200,64,58,0.85)" : "rgba(200,64,58,0.45)");
+    ctx.lineWidth = isCh ? 1.5 : 1;
+    ctx.strokeRect(left + 0.5, topY + 0.5, w - 1, h - 1);
+
+    ctx.font = "10px system-ui,sans-serif";
+    ctx.fillStyle = bull ? "rgba(31,138,91,0.95)" : "rgba(200,64,58,0.95)";
+    const label = e.type;
+    const tw = ctx.measureText(label).width;
+    if (w > tw + 8 && h > 12) ctx.fillText(label, left + 4, topY + 11);
+  });
+}
+
 function applyStructure(data, events){
   if (!structureSeries) return;
   clearStructureLines();
@@ -160,34 +224,33 @@ function applyStructure(data, events){
     time: c.time, open: c.open, high: c.high, low: c.low, close: c.close
   })));
 
-  const markers = events.map(e => {
-    const bull = e.bias === "bull";
-    const isCh = e.type === "CHoCH";
-    return {
-      time: e.time,
-      position: bull ? "belowBar" : "aboveBar",
-      shape: isCh ? "circle" : "square",
-      color: bull ? "#1f8a5b" : "#c8403a",
-      text: e.type
-    };
-  });
-  structureSeries.setMarkers(markers);
+  // Blocks only — no marker clutter
+  structureSeries.setMarkers([]);
 
-  events.slice(-8).forEach(e => {
+  const recent = events.slice(-10);
+  structureLastEvents = recent;
+  structureLastData = data;
+
+  if (recent.length){
+    const e = recent[recent.length - 1];
     const bull = e.bias === "bull";
     const isCh = e.type === "CHoCH";
-    const col = isCh
-      ? (bull ? "rgba(31,138,91,0.95)" : "rgba(200,64,58,0.95)")
-      : (bull ? "rgba(31,138,91,0.75)" : "rgba(200,64,58,0.75)");
     structureLines.push(structureSeries.createPriceLine({
       price: e.level,
-      color: col,
-      lineWidth: isCh ? 2 : 1,
-      lineStyle: isCh ? 0 : 2,
+      color: isCh
+        ? (bull ? "rgba(31,138,91,0.55)" : "rgba(200,64,58,0.55)")
+        : (bull ? "rgba(31,138,91,0.35)" : "rgba(200,64,58,0.35)"),
+      lineWidth: 1,
+      lineStyle: 2,
       axisLabelVisible: true,
       title: e.type
     }));
-  });
+  }
+
+  drawStructureBlocks();
+  try { structureChart.timeScale().fitContent(); } catch(e){}
+  setTimeout(drawStructureBlocks, 50);
+  setTimeout(drawStructureBlocks, 200);
 
   const list = $("listStructure");
   if (list){
@@ -207,11 +270,19 @@ function applyStructure(data, events){
       }).join("");
     }
   }
-  try { structureChart.timeScale().fitContent(); } catch(e){}
+}
+
+function startStructurePulse(){
+  if (structurePulseTimer) return;
+  structurePulseTimer = setInterval(() => {
+    if (!structureLastEvents.some(e => e.type === "CHoCH")) return;
+    drawStructureBlocks();
+  }, 400);
 }
 
 async function loadStructurePanel(){
   initStructureChart();
+  startStructurePulse();
   const list = $("listStructure");
   if (list) list.innerHTML = '<div class="empty">Loading structure…</div>';
   try {
