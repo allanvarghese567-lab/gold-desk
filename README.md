@@ -1,32 +1,36 @@
-# Gold Desk (XAU/USD)
+# Gold Desk
 
-Live gold chart + Forex Factory red/orange/yellow USD news + TradingView alert signals.
+Live XAU/USD (and FX) desk: OANDA stream, confirmation engine, pattern/OB/profile panels, TradingView webhooks.
 
-**Live demo:** https://gold-desk-ffm8.onrender.com/
+Public URL: https://gold-desk-ffm8.onrender.com/
 
-## Run locally
-1. Get a free OANDA practice account, generate an API token (My Hub > Manage API Access).
-2. `cp .env.example .env` and fill in OANDA_TOKEN and OANDA_ACCOUNT.
-3. `pip install -r requirements.txt`
-4. `uvicorn main:app --reload`
-5. Open http://localhost:8000
+## TradingView webhook logging
 
-## TradingView alerts (optional)
-Webhook URL (live):
-```
-https://gold-desk-ffm8.onrender.com/webhook/tv
-```
-Message example:
+`POST /webhook/tv` accepts the same JSON as before. Each alert is:
+
+1. Pushed to the live desk (SSE + in-memory list)
+2. Appended to SQLite `data/golddesk.db` → table `tv_webhook_log`
+3. If `side` + `price` are present → opens a **draft journal** row (`status=open`, `source=tv`)
+
+### Endpoints
+
+- `GET /api/webhook/logs` — persistent webhook log
+- `GET /api/journal` — journal rows (including TV drafts)
+- `GET /api/signals` — recent signals (memory, else log)
+
+### Example TV alert message
+
 ```json
-{"secret":"golddesk123","side":"buy","price":"{{close}}","note":"my setup","tf":"{{interval}}"}
+{
+  "secret": "your-TV_WEBHOOK_SECRET",
+  "side": "buy",
+  "price": "{{close}}",
+  "instrument": "XAUUSD",
+  "tf": "{{interval}}",
+  "note": "OB + FVG"
+}
 ```
 
-## Confirmation engine
+### Note on Render disk
 
-Live checklist of price / volume / trend / momentum / volatility / multi-TF / risk filters on OANDA XAU/USD bars.
-
-- API: `GET /api/confirm?side=long&granularity=M15`
-- Codes list: `GET /api/confirm/codes`
-- Default rule: `(P_CLOSE or P_RETEST) and CATS(3) and R_RR`
-
-UI: sidebar panel → pick Long/Short + timeframe → **Run**.
+SQLite lives under `data/`. On free Render, the filesystem can reset on redeploy — treat this as a durable log for the life of the instance, or move to Supabase later for permanent history.
