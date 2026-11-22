@@ -1,0 +1,4 @@
+id,name,base_url,auth_type,notes,payload_model
+oanda_practice,OANDA Practice,https://api-fxpractice.oanda.com,bearer,Practice REST API,"{""Authorization"":""Bearer {{OANDA_TOKEN}}""}"
+oanda_live,OANDA Live,https://api-fxtrade.oanda.com,bearer,Live REST API,"{""Authorization"":""Bearer {{OANDA_TOKEN}}""}"
+generic,Generic REST,https://httpbin.org,none,Test endpoint,"{}"
