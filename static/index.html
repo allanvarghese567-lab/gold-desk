@@ -45,6 +45,19 @@ h2{font-size:14px;margin:0;padding:10px 14px;border-bottom:1px solid var(--line)
 .tag-bos-bull{background:rgba(31,138,91,.2);color:var(--up)}.tag-bos-bear{background:rgba(200,64,58,.18);color:var(--down)}
 .tag-choch-bull{background:rgba(31,138,91,.35);color:var(--up)}.tag-choch-bear{background:rgba(200,64,58,.35);color:var(--down)}
 .choch-blink .tag{animation:chochPulse 1.4s ease-in-out infinite}@keyframes chochPulse{0%,100%{opacity:1}50%{opacity:.55}}
+.api-section{margin-top:14px}.api-grid{display:grid;grid-template-columns:minmax(180px,1fr) minmax(0,2fr);gap:12px}@media(max-width:900px){.api-grid{grid-template-columns:1fr}}
+.api-panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px}
+.api-btn-item{display:block;width:100%;text-align:left;margin-bottom:6px}.api-btn-item.active{border-color:var(--accent);background:rgba(224,176,74,.12)}
+.api-btn-item span{color:var(--mute);font-size:11px;margin-left:6px}
+.api-form label{display:block;font-size:11px;color:var(--mute);margin:8px 0 4px}
+.api-form input,.api-form select,.api-form textarea{width:100%;font:inherit;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:6px 8px}
+.api-form textarea{min-height:64px;font-family:ui-monospace,monospace;font-size:12px}
+.api-actions{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.api-var-row{display:flex;gap:6px;align-items:center;margin-bottom:4px;font-size:12px}
+.api-var-row input{flex:1}.api-resolved,.api-run-result{white-space:pre-wrap;font:12px/1.4 ui-monospace,monospace;background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:10px;max-height:180px;overflow:auto;margin-top:8px}
+.api-hist-row{display:grid;grid-template-columns:auto 1fr;gap:8px;padding:8px 0;border-bottom:1px solid var(--line);font-size:12px}
+.api-hist-row.ok .tag{background:rgba(31,138,91,.2);color:var(--up)}.api-hist-row.bad .tag{background:rgba(200,64,58,.2);color:var(--down)}
+.api-broker-row{padding:6px 0;border-bottom:1px solid var(--line);font-size:12px}
 .edu-note{font-size:12px;color:var(--mute);margin:0 0 10px;line-height:1.5}
 .iframe-section{margin-top:14px}.iframe-bar{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-bottom:8px}
 .iframe-frame-wrap{position:relative;background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden;height:50vh;min-height:280px}
@@ -82,7 +95,7 @@ h2{font-size:14px;margin:0;padding:10px 14px;border-bottom:1px solid var(--line)
 </div>
 <div class="panel">
 <h2>Confirmation engine</h2>
-<p class="edu-note" style="padding:0 14px;margin:8px 0">Scores a long or short idea against your rules. High score = more agreement, not a guarantee. Check entry · SL · TP and each yes/no line.</p>
+<p class="edu-note" style="padding:0 14px;margin:8px 0">Scores a long or short idea against your rules. High score = more agreement, not a guarantee.</p>
 <div class="confirm-head">
 <select id="cfSide"><option value="long">Long</option><option value="short">Short</option></select>
 <select id="cfGran"><option value="M15">15m</option><option value="M5">5m</option><option value="H1">1h</option><option value="H4">4h</option><option value="D">1D</option></select>
@@ -94,73 +107,69 @@ h2{font-size:14px;margin:0;padding:10px 14px;border-bottom:1px solid var(--line)
 </aside>
 </div>
 
-<section class="pattern-section">
-<h2 class="sec">Candlestick analysis · FVG · BAG</h2>
-<p class="edu-note"><b>One-candle</b> = single-bar patterns (doji, hammer). <b>Two-candle</b> = pairs + FVG gaps. <b>Multiple</b> = 3+ bars. FVG = fast move left a gap; BAG = breakaway gap. Use for timing, not full bias alone.</p>
-<div class="pattern-grid">
-<div class="pattern-panel" data-kind="single"><div class="ph"><b>One-candlestick</b><span>single · BAG</span></div>
-<div class="pattern-tfs" data-kind="single"><button type="button" data-g="M5">5m</button><button type="button" data-g="M15" aria-pressed="true">15m</button><button type="button" data-g="H1">1h</button><button type="button" data-g="H4">4h</button><button type="button" data-g="D">1D</button></div>
-<div class="pattern-chart" id="chartSingle"></div><div class="pattern-list" id="listSingle"><div class="empty">Loading…</div></div></div>
-<div class="pattern-panel" data-kind="dual"><div class="ph"><b>Two-candlestick</b><span>pair · FVG · BAG</span></div>
-<div class="pattern-tfs" data-kind="dual"><button type="button" data-g="M5">5m</button><button type="button" data-g="M15" aria-pressed="true">15m</button><button type="button" data-g="H1">1h</button><button type="button" data-g="H4">4h</button><button type="button" data-g="D">1D</button></div>
-<div class="pattern-chart" id="chartDual"></div><div class="pattern-list" id="listDual"><div class="empty">Loading…</div></div></div>
-<div class="pattern-panel" data-kind="multi"><div class="ph"><b>Multiple-candlestick</b><span>multi · FVG · BAG</span></div>
-<div class="pattern-tfs" data-kind="multi"><button type="button" data-g="M5">5m</button><button type="button" data-g="M15" aria-pressed="true">15m</button><button type="button" data-g="H1">1h</button><button type="button" data-g="H4">4h</button><button type="button" data-g="D">1D</button></div>
-<div class="pattern-chart" id="chartMulti"></div><div class="pattern-list" id="listMulti"><div class="empty">Loading…</div></div></div>
+<section class="api-section pattern-section">
+<h2 class="sec">API Buttons · session variables · brokers CSV · history</h2>
+<p class="edu-note">Create buttons with URL + payload. Use <code>{{variable}}</code> placeholders; set values under session variables (this tab only). Brokers templates and call history are stored as CSV on the server.</p>
+<div class="api-grid">
+  <div class="api-panel">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+      <b style="font-size:13px">Buttons</b>
+      <button type="button" class="ghost" id="apiNewBtn">+ New</button>
+    </div>
+    <div id="apiBtnList"><div class="empty">Loading…</div></div>
+    <hr style="border:0;border-top:1px solid var(--line);margin:12px 0">
+    <b style="font-size:13px">Session variables</b>
+    <div id="apiVars" style="margin-top:8px"></div>
+    <div style="display:flex;gap:6px;margin-top:8px">
+      <input id="apiNewVarKey" placeholder="KEY" style="flex:1">
+      <input id="apiNewVarVal" placeholder="value" style="flex:1">
+      <button type="button" id="apiAddVar">Add</button>
+    </div>
+  </div>
+  <div class="api-panel api-form">
+    <b style="font-size:13px">Edit selected button</b>
+    <label>Button label</label>
+    <input id="apiLabel" placeholder="e.g. OANDA account summary">
+    <label>Method</label>
+    <select id="apiMethod"><option>GET</option><option>POST</option><option>PUT</option><option>PATCH</option><option>DELETE</option></select>
+    <label>URL</label>
+    <input id="apiUrl" placeholder="https://api…/v3/accounts/{{OANDA_ACCOUNT}}/summary">
+    <label>Broker template</label>
+    <select id="apiBroker"></select>
+    <label>Headers (JSON)</label>
+    <textarea id="apiHeaders">{"Authorization":"Bearer {{OANDA_TOKEN}}"}</textarea>
+    <label>Payload (raw text or JSON)</label>
+    <textarea id="apiPayload" placeholder='{"order":{}}'></textarea>
+    <div class="api-actions">
+      <button type="button" id="apiSaveBtn">Save</button>
+      <button type="button" id="apiRunBtn">Run call</button>
+      <button type="button" class="ghost" id="apiDelBtn">Delete</button>
+    </div>
+    <label style="margin-top:12px">Resolved request</label>
+    <pre class="api-resolved" id="apiResolved"></pre>
+    <label>Last response</label>
+    <pre class="api-run-result" id="apiRunResult">—</pre>
+  </div>
 </div>
-</section>
-
-<section class="ob-section pattern-section">
-<h2 class="sec">Order blocks · six-rule filter</h2>
-<p class="edu-note">Zones where larger orders may rest. Only blocks that pass all six rules are shown. Price often revisits these areas — possible support/resistance, not guaranteed turns.</p>
-<div class="pattern-grid" style="grid-template-columns:1fr"><div class="pattern-panel" data-kind="ob">
-<div class="ph"><b>Valid order blocks</b><span>six rules</span></div>
-<div class="pattern-tfs" data-kind="ob"><button type="button" data-g="M15" aria-pressed="true">15m</button><button type="button" data-g="H1">1h</button><button type="button" data-g="H4">4h</button><button type="button" data-g="D">1D</button></div>
-<div class="pattern-chart" id="chartOb"></div><div class="pattern-list" id="listOb"><div class="empty">Loading…</div></div>
-</div></div>
-</section>
-
-<section class="profile-section pattern-section">
-<h2 class="sec">Footprint · Volume Profile</h2>
-<p class="edu-note"><b>Volume Profile</b> = where most volume traded (POC, value area). <b>Footprint</b> = rough buy/sell pressure per bar. High-volume prices can act like magnets; low-volume areas can move fast.</p>
-<div class="pattern-grid" style="grid-template-columns:1fr"><div class="pattern-panel" data-kind="profile">
-<div class="ph"><b>Order flow</b><span>VP · footprint</span></div>
-<div class="profile-modes"><button type="button" data-mode="vp" aria-pressed="true">Volume Profile</button><button type="button" data-mode="footprint">Footprint</button></div>
-<div class="pattern-tfs profile-tfs" data-kind="profile"><button type="button" data-g="M15" aria-pressed="true">15m</button><button type="button" data-g="H1">1h</button><button type="button" data-g="H4">4h</button></div>
-<div class="pattern-chart" id="chartProfile"></div><div class="pattern-list" id="listProfile"><div class="empty">Loading…</div></div>
-</div></div>
-</section>
-
-<section class="structure-section pattern-section">
-<h2 class="sec">Market structure · BOS · CHoCH</h2>
-<p class="edu-note"><b>Green</b> = up · <b>Red</b> = down · <b>Yellow RANGE</b> = sideways (warning). <b>BOS</b> = trend may continue. <b>CHoCH</b> (blinks) = trend may change. Only a candle <b>close</b> beyond the level counts — not a wick alone.</p>
-<div class="pattern-grid" style="grid-template-columns:1fr"><div class="pattern-panel" data-kind="structure">
-<div class="ph"><b>BOS / CHoCH</b><span>green=up · red=down · yellow=range · blink=CHoCH</span></div>
-<div class="pattern-tfs structure-tfs" data-kind="structure"><button type="button" data-g="M15">15m</button><button type="button" data-g="H1" aria-pressed="true">1h</button><button type="button" data-g="H4">4h</button><button type="button" data-g="D">1D</button></div>
-<div class="pattern-chart" id="chartStructure"></div><div class="pattern-list" id="listStructure"><div class="empty">Loading…</div></div>
-</div></div>
-</section>
-
-<section class="crt-section pattern-section">
-<h2 class="sec">CRT · TBS · Candle Range Theory</h2>
-<p class="edu-note"><b>CRT</b> = one candle’s high/low is the range; next bar sweeps <em>one</em> side and closes back inside — bias toward the other side. <b>TBS</b> (gold, blinks) = Turtle Body Soup: false break, body closes back. <b>Yellow RANGE</b> = sideways warning. Lines = CRT high, low, 50%.</p>
-<div class="pattern-grid" style="grid-template-columns:1fr"><div class="pattern-panel" data-kind="crt">
-<div class="ph"><b>CRT + TBS</b><span>range block · sweep · TBS blink · yellow=sideways</span></div>
-<div class="pattern-tfs crt-tfs" data-kind="crt">
-<button type="button" data-g="M15">15m</button>
-<button type="button" data-g="H1" aria-pressed="true">1h</button>
-<button type="button" data-g="H4">4h</button>
-<button type="button" data-g="D">1D</button>
+<div class="api-grid" style="margin-top:12px">
+  <div class="api-panel">
+    <b style="font-size:13px">Brokers CSV · payload models</b>
+    <div id="apiBrokerList" style="margin-top:8px"><div class="empty">Loading…</div></div>
+  </div>
+  <div class="api-panel">
+    <div style="display:flex;justify-content:space-between;align-items:center">
+      <b style="font-size:13px">Call history CSV</b>
+      <button type="button" class="ghost" id="apiClearHist">Clear</button>
+    </div>
+    <div id="apiHistory" style="margin-top:8px"><div class="empty">Loading…</div></div>
+  </div>
 </div>
-<div class="pattern-chart" id="chartCrt"></div>
-<div class="pattern-list" id="listCrt"><div class="empty">Loading…</div></div>
-</div></div>
 </section>
 
 <div id="eduMount"></div>
 
 <section class="iframe-section">
-<div class="iframe-bar"><span style="color:var(--mute);font-size:13px">Workspace · open TradingView or Forex Factory inside the desk</span>
+<div class="iframe-bar"><span style="color:var(--mute);font-size:13px">Workspace</span>
 <button type="button" id="btnTv">TradingView</button><button type="button" id="btnFf">Forex Factory</button>
 <button type="button" class="ghost" id="btnFs">Full screen</button></div>
 <div class="iframe-frame-wrap"><iframe id="deskFrame" title="Workspace"></iframe></div>
@@ -173,6 +182,7 @@ h2{font-size:14px;margin:0;padding:10px 14px;border-bottom:1px solid var(--line)
 <script src="/static/structure.js"></script>
 <script src="/static/crt.js"></script>
 <script src="/static/sessions.js"></script>
+<script src="/static/api_buttons.js"></script>
 <script src="/static/edu.js"></script>
 <script>
 const $=id=>document.getElementById(id);
