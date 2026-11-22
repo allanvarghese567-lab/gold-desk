@@ -8,6 +8,7 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
+from api_panel import attach_api_panel
 from confirmation_engine import (
     DEFAULT_RULE,
     SIGNALS,
@@ -277,21 +278,16 @@ def publish(kind: str, payload: dict):
 
 
 async def price_stream():
-    """OANDA pricing stream → SSE ticks. Retries on failure."""
     url = f"{STREAM}/v3/accounts/{ACCOUNT}/pricing/stream"
     joined = ",".join(INSTRUMENTS)
     headers = {**HEAD, "Accept": "application/json"}
     while True:
         try:
-            print("oanda stream connecting…")
             async with httpx.AsyncClient(timeout=None) as c:
                 async with c.stream("GET", url, headers=headers, params={"instruments": joined}) as r:
                     if r.status_code != 200:
-                        body = (await r.aread())[:400]
-                        print("stream HTTP", r.status_code, body)
                         await asyncio.sleep(8)
                         continue
-                    print("oanda stream connected")
                     publish("status", {"stream": "live", "t": int(time.time())})
                     async for line in r.aiter_lines():
                         if not line:
@@ -316,7 +312,6 @@ async def price_stream():
                             "mid": mid,
                         })
         except Exception as e:
-            print("stream error, retrying in 5s:", e)
             publish("status", {"stream": "retry", "error": str(e)[:120], "t": int(time.time())})
             await asyncio.sleep(5)
 
@@ -362,7 +357,6 @@ async def fetch_oanda_bars(granularity: str = "M15", count: int = 300, instrumen
 
 @app.get("/api/pricing")
 async def pricing_snapshot(instrument: str | None = None):
-    """REST mid snapshot — fallback when SSE stream is quiet."""
     if not TOKEN or not ACCOUNT:
         raise HTTPException(503, "OANDA not configured")
     ins = normalize_instrument(instrument)
@@ -502,22 +496,28 @@ async def journal_open(req: Request):
     except (TypeError, ValueError):
         raise HTTPException(400, "stop/target must be numbers")
     ins = normalize_instrument(body.get("instrument"))
+    tid = str(uuid.uuid4())
     t = int(time.time())
-    jid = str(uuid.uuid4())
+    session = classify_session_ist(t)
     with _db() as conn:
         conn.execute(
             """
             INSERT INTO journal (
                 id, opened_at, closed_at, instrument, side, style, session, granularity,
                 entry, stop, target, exit, result_r, status, source, confirm_score, notes, tv_log_id
-            ) VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, 'open', 'manual', ?, ?, NULL)
+            ) VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, 'open', ?, ?, ?, NULL)
             """,
-            (jid, t, ins, side, body.get("style"), classify_session_ist(t),
-             body.get("granularity") or body.get("tf"), entry, stop, target,
-             body.get("confirm_score"), body.get("notes")),
+            (
+                tid, t, ins, side,
+                body.get("style"), session, body.get("granularity"),
+                entry, stop, target,
+                body.get("source") or "manual",
+                body.get("confirm_score"),
+                body.get("notes"),
+            ),
         )
         conn.commit()
-    return {"ok": True, "id": jid, "session": classify_session_ist(t)}
+    return {"id": tid, "status": "open"}
 
 
 @app.patch("/api/journal/{trade_id}/close")
@@ -528,111 +528,89 @@ async def journal_close(trade_id: str, req: Request):
     except Exception:
         raise HTTPException(400, "exit required")
     with _db() as conn:
-        row = conn.execute("SELECT * FROM journal WHERE id = ?", (trade_id,)).fetchone()
+        row = conn.execute("SELECT * FROM journal WHERE id=?", (trade_id,)).fetchone()
         if not row:
             raise HTTPException(404, "trade not found")
         if row["status"] != "open":
-            raise HTTPException(400, "trade already closed")
+            raise HTTPException(400, "already closed")
         entry = float(row["entry"])
         stop = row["stop"]
-        if body.get("stop") is not None:
-            stop = float(body["stop"])
-        if stop is None:
-            raise HTTPException(400, "stop required to compute R")
-        try:
-            result_r = compute_result_r(row["side"], entry, float(stop), exit_px)
-        except ValueError as e:
-            raise HTTPException(400, str(e))
-        status = "be" if abs(result_r) <= 1e-9 else ("win" if result_r > 0 else "loss")
+        result_r = None
+        status = "be"
+        if stop is not None:
+            try:
+                result_r = compute_result_r(row["side"], entry, float(stop), exit_px)
+                if abs(result_r) < 1e-9:
+                    status = "be"
+                elif result_r > 0:
+                    status = "win"
+                else:
+                    status = "loss"
+            except Exception:
+                result_r = None
+                status = "be"
         closed_at = int(time.time())
         conn.execute(
-            "UPDATE journal SET closed_at = ?, exit = ?, stop = ?, result_r = ?, status = ? WHERE id = ?",
-            (closed_at, exit_px, float(stop), result_r, status, trade_id),
+            "UPDATE journal SET closed_at=?, exit=?, result_r=?, status=? WHERE id=?",
+            (closed_at, exit_px, result_r, status, trade_id),
         )
         conn.commit()
-        updated = conn.execute("SELECT * FROM journal WHERE id = ?", (trade_id,)).fetchone()
-    return {"ok": True, "trade": dict(updated), "result_r": round(result_r, 4), "status": status}
+    return {"id": trade_id, "status": status, "result_r": result_r}
 
 
 @app.get("/api/journal/stats")
-async def journal_stats_api(
-    instrument: str | None = Query(None),
-    style: str | None = Query(None),
-    session: str | None = Query(None),
-    source: str | None = Query(None),
-    limit: int = Query(500, ge=1, le=5000),
-):
-    q = "SELECT * FROM journal WHERE status IN ('win','loss','be')"
-    args: list = []
-    if instrument:
-        q += " AND instrument = ?"
-        args.append(normalize_instrument(instrument))
-    if style:
-        q += " AND style = ?"
-        args.append(style)
-    if session:
-        q += " AND session = ?"
-        args.append(session)
-    if source:
-        q += " AND source = ?"
-        args.append(source)
-    q += " ORDER BY closed_at DESC LIMIT ?"
-    args.append(limit)
+async def journal_stats_api():
     with _db() as conn:
-        rows = [dict(r) for r in conn.execute(q, args).fetchall()]
-    stats = journal_stats(rows)
-    stats["formula"] = "(win_rate * avg_win_r) - ((1 - win_rate) * avg_loss_r)"
-    stats["filters"] = {"instrument": instrument, "style": style, "session": session, "source": source, "limit": limit}
-    return stats
+        rows = conn.execute("SELECT * FROM journal").fetchall()
+    return journal_stats([dict(r) for r in rows])
 
 
 @app.get("/api/confirm")
 async def confirm(
-    side: str = Query("long", pattern="^(long|short)$"),
+    side: str = Query("long"),
     granularity: str = Query("M15"),
-    rule: str = Query(None),
-    stop_atr: float = Query(2.0, ge=0.3, le=5.0),
-    rr: float = Query(2.0, ge=1.0, le=10.0),
     instrument: str | None = None,
 ):
-    if granularity not in {"M5", "M15", "H1", "H4", "D"}:
-        raise HTTPException(400, "granularity must be M5, M15, H1, H4, or D")
-    if not TOKEN:
-        raise HTTPException(503, "OANDA_TOKEN not configured")
-    ins = normalize_instrument(instrument)
-    bars = await fetch_oanda_bars(granularity, 300, ins)
-    if len(bars) < 60:
-        raise HTTPException(502, "not enough candles from OANDA")
-    atr = atr_series(bars)[-1]
-    if not atr or atr <= 0:
-        raise HTTPException(502, "ATR unavailable")
-    entry = bars[-1]["c"]
-    s = 1 if side == "long" else -1
-    stop = entry - s * stop_atr * atr
-    target = entry + s * rr * stop_atr * atr
-    ctx = {"entry": entry, "stop": stop, "target": target}
-    use_rule = rule or DEFAULT_RULE
-    try:
-        results = run_all(bars, s, ctx)
-        decision = eval_rule(use_rule, results)
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    total_w = sum(w for (_, _, _, w) in SIGNALS.values())
-    got_w = sum(SIGNALS[c][3] for c, v in results.items() if v)
-    cats = sorted({c.split("_")[0] for c, v in results.items() if v and not c.startswith("R_")})
-    checks = [
-        {"code": code, "ok": bool(results[code]), "desc": SIGNALS[code][1], "weight": SIGNALS[code][3], "category": code.split("_")[0]}
-        for code in SIGNALS
-    ]
+    side = side.lower()
+    if side not in ("long", "short"):
+        raise HTTPException(400, "side must be long or short")
+    if granularity not in {"M1", "M5", "M15", "H1", "H4", "D"}:
+        raise HTTPException(400, "bad granularity")
+    bars = await fetch_oanda_bars(granularity, 300, instrument)
+    if len(bars) < 30:
+        raise HTTPException(502, "not enough bars")
+    atr = atr_series(bars, 14)
+    ctx = {
+        "bars": bars,
+        "atr": atr,
+        "side": side,
+        "instrument": normalize_instrument(instrument),
+        "granularity": granularity,
+    }
+    results = run_all(ctx)
+    score = sum(r["weight"] for r in results if r["ok"])
+    score_max = sum(r["weight"] for r in results)
+    ratio = score / score_max if score_max else 0
+    decision = "ENTER" if ratio >= 0.55 else "WAIT"
+    last = bars[-1]
+    entry = last["c"]
+    a = atr[-1] if atr else abs(last["h"] - last["l"])
+    if side == "long":
+        stop = entry - 1.5 * a
+        target = entry + 2.5 * a
+    else:
+        stop = entry + 1.5 * a
+        target = entry - 2.5 * a
     return {
-        "instrument": ins, "side": side, "granularity": granularity,
-        "entry": round(entry, 3), "stop": round(stop, 3), "target": round(target, 3),
-        "atr": round(atr, 3), "stop_atr": stop_atr, "rr": rr, "rule": use_rule,
-        "decision": "ENTER" if decision else "WAIT",
-        "score": round(got_w, 2), "score_max": round(total_w, 2),
-        "score_pct": round(100 * got_w / total_w, 1) if total_w else 0,
-        "categories": cats, "checks": checks,
-        "bar_count": len(bars), "bar_time": bars[-1]["time"],
+        "decision": decision,
+        "score": round(score, 2),
+        "score_max": round(score_max, 2),
+        "ratio": round(ratio, 4),
+        "entry": round(entry, 5),
+        "stop": round(stop, 5),
+        "target": round(target, 5),
+        "checks": results,
+        "bar_time": last["time"],
     }
 
 
@@ -669,5 +647,14 @@ async def stream(req: Request):
 async def index():
     return FileResponse("static/index.html")
 
+
+app.include_router(
+    attach_api_panel(
+        data_dir=DATA_DIR,
+        db_factory=_db,
+        oanda_token=TOKEN,
+        oanda_account=ACCOUNT,
+    )
+)
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
